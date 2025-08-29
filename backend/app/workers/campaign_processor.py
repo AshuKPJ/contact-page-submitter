@@ -1,56 +1,157 @@
+"""
+Main campaign processor - coordinates the entire automation workflow
+"""
+
 import asyncio
-from playwright.async_api import async_playwright
-import sys
-import os
+from datetime import datetime
+from typing import Dict, Any, List
 
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
-
-from app.core.database import SessionLocal
-from app.models.submission import Submission
-from app.models.website import Website
+# Use relative imports for modules in the same package
+from .browser_automation import BrowserAutomation
+from .database_handler import DatabaseHandler
 
 
-async def run(campaign_id):
-    print(f"Starting browser for campaign: {campaign_id}")
+class CampaignProcessor:
+    """Processes campaigns by automating form submissions on websites"""
 
-    # Get submissions from database
-    db = SessionLocal()
-    submissions = (
-        db.query(Submission).filter(Submission.campaign_id == campaign_id).all()
-    )
+    def __init__(self, campaign_id: str, headless: bool = True):
+        self.campaign_id = campaign_id
+        self.db = DatabaseHandler()
+        self.browser = BrowserAutomation(headless=headless)
+        self.results = []
 
-    print(f"Found {len(submissions)} URLs to process")
+    async def run(self):
+        """Main processing method"""
+        print(f"\n{'='*60}")
+        print(f"Starting campaign: {self.campaign_id}")
+        print(f"{'='*60}\n")
 
-    # Start browser
-    playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(
-        headless=False  # This makes browser visible
-    )
+        try:
+            # Load campaign data
+            campaign = self.db.get_campaign(self.campaign_id)
+            if not campaign:
+                raise ValueError(f"Campaign {self.campaign_id} not found")
 
-    try:
-        for submission in submissions:
-            website = (
-                db.query(Website).filter(Website.id == submission.website_id).first()
-            )
+            print(f"Campaign: {campaign.name}")
+            print(f"Status: {campaign.status}")
 
-            if website:
-                print(f"Opening: {website.contact_url}")
+            # Load user profile for form data
+            user_data = self.db.get_user_profile(campaign.user_id)
+            print(f"User profile loaded for: {user_data['email']}")
 
-                page = await browser.new_page()
-                await page.goto(website.contact_url)
-                await page.wait_for_timeout(5000)  # Wait 5 seconds
+            # Get pending submissions
+            submissions = self.db.get_pending_submissions(self.campaign_id, limit=10)
+            if not submissions:
+                print("No pending submissions found")
+                self.db.update_campaign_stats(self.campaign_id, 0, 0, "completed")
+                return
+
+            print(f"Found {len(submissions)} submissions to process\n")
+
+            # Start browser
+            await self.browser.start()
+            print("Browser started successfully")
+
+            if not self.browser.headless:
+                print("Browser window should be visible - watch the automation!")
+
+            # Process each submission
+            for i, submission in enumerate(submissions, 1):
+                print(f"\n{'-'*40}")
+                print(f"Processing {i}/{len(submissions)}: {submission.url}")
+
+                result = await self._process_submission(submission, user_data)
+                self.results.append(result)
+
+                # Update database
+                self.db.update_submission(submission, result)
+
+                status_icon = "✓" if result["success"] else "✗"
+                print(f"{status_icon} Status: {result['status']}")
+
+                # Small delay between submissions
+                if i < len(submissions):
+                    await asyncio.sleep(2)
+
+            # Update campaign statistics
+            self._finalize_campaign()
+
+        except Exception as e:
+            print(f"Campaign processing error: {str(e)}")
+            self.db.update_campaign_stats(self.campaign_id, 0, 0, "failed")
+            raise
+        finally:
+            await self.browser.stop()
+            self.db.close()
+            print("\nCleanup completed")
+
+    async def _process_submission(self, submission, user_data: Dict) -> Dict:
+        """Process a single submission"""
+        result = {
+            "submission_id": str(submission.id),
+            "url": submission.url,
+            "status": "pending",
+            "success": False,
+            "method": None,
+            "error": None,
+            "details": [],
+        }
+
+        page = None
+
+        try:
+            # Create browser page
+            page = await self.browser.create_page()
+
+            # Try to navigate to the URL
+            if not await self.browser.navigate(page, submission.url):
+                result["status"] = "navigation_failed"
+                result["details"].append("Could not load website")
+                return result
+
+            # Try to find and fill a form
+            form_result = await self.browser.process_form(page, user_data)
+
+            if form_result["success"]:
+                result["status"] = "form_submitted"
+                result["success"] = True
+                result["method"] = "form"
+                result["details"] = form_result["details"]
+            else:
+                # If no form, try to extract emails
+                emails = await self.browser.extract_emails(page)
+                if emails:
+                    result["status"] = "email_found"
+                    result["success"] = True
+                    result["method"] = "email"
+                    result["email_extracted"] = emails[0]
+                    result["details"].append(f"Found email: {emails[0]}")
+                else:
+                    result["status"] = "no_contact_method"
+                    result["details"].append("No form or email found")
+
+        except Exception as e:
+            result["status"] = "failed"
+            result["error"] = str(e)[:500]
+            result["details"].append(f"Error: {str(e)[:100]}")
+
+        finally:
+            if page:
                 await page.close()
 
-    finally:
-        await browser.close()
-        await playwright.stop()
-        db.close()
+        return result
 
+    def _finalize_campaign(self):
+        """Update final campaign statistics"""
+        successful = sum(1 for r in self.results if r["success"])
+        failed = len(self.results) - successful
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        asyncio.run(run(sys.argv[1]))
-    else:
-        print("Usage: python campaign_processor.py <campaign_id>")
+        self.db.update_campaign_stats(self.campaign_id, successful, failed, "completed")
+
+        print(f"\n{'='*60}")
+        print(f"Campaign Results:")
+        print(f"  Total processed: {len(self.results)}")
+        print(f"  Successful: {successful}")
+        print(f"  Failed: {failed}")
+        print(f"  Success rate: {(successful/len(self.results)*100):.1f}%")
+        print(f"{'='*60}")

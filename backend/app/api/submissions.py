@@ -11,12 +11,14 @@ from fastapi import (
     BackgroundTasks,
 )
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 from typing import Optional, List
+from pydantic import BaseModel
 import csv
 import io
 import asyncio
 import sys
+import traceback
 from datetime import datetime
 from urllib.parse import urlparse
 import uuid
@@ -34,149 +36,104 @@ from app.schemas.submission import (
     SubmissionList,
 )
 from app.services.submission_service import SubmissionService
+from app.workers import process_campaign
 
 router = APIRouter()
 
 
+# Define the request schema
+class SubmissionStartRequest(BaseModel):
+    campaign_id: str
+    headless: Optional[bool] = None  # None means use config default
+
+
 @router.post("/start")
 async def start_submission_campaign(
-    background_tasks: BackgroundTasks,  # Moved before optional parameters
-    file: UploadFile = File(...),
-    proxy: Optional[str] = Form(None),
-    haltOnCaptcha: Optional[str] = Form("true"),
+    request: SubmissionStartRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Start a new submission campaign from uploaded CSV file"""
-
-    # Validate file type
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="File must be a CSV")
-
-    # Read and parse CSV file
+    """Start submission campaign processing"""
     try:
-        contents = await file.read()
+        print(
+            f"[SUBMISSIONS] Starting browser automation for campaign {request.campaign_id}"
+        )
 
-        # Try different encodings
-        csv_text = None
-        for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1252"]:
+        # Get campaign and verify ownership
+        campaign = (
+            db.query(Campaign)
+            .filter(
+                Campaign.id == request.campaign_id, Campaign.user_id == current_user.id
+            )
+            .first()
+        )
+
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        # Check if already processing
+        if campaign.status == "processing":
+            raise HTTPException(
+                status_code=400, detail="Campaign is already being processed"
+            )
+
+        # Update campaign status to processing
+        campaign.status = "processing"
+        db.commit()
+
+        # Start processing in background
+        from threading import Thread
+
+        def run_campaign():
             try:
-                csv_text = contents.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                continue
+                # Use headless setting from request or config
+                process_campaign(str(campaign.id), headless=request.headless)
+            except Exception as e:
+                print(f"[SUBMISSIONS ERROR] Campaign processing failed: {e}")
+                # Update status to failed
+                from app.core.database import SessionLocal
 
-        if csv_text is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Unable to decode CSV file. Please save as UTF-8",
-            )
+                db_session = SessionLocal()
+                try:
+                    failed_campaign = (
+                        db_session.query(Campaign)
+                        .filter(Campaign.id == campaign.id)
+                        .first()
+                    )
+                    if failed_campaign:
+                        failed_campaign.status = "failed"
+                        db_session.commit()
+                finally:
+                    db_session.close()
 
-        # Remove BOM if present
-        if csv_text.startswith("\ufeff"):
-            csv_text = csv_text[1:]
+        # Start in background thread
+        thread = Thread(target=run_campaign, daemon=True)
+        thread.start()
 
-        csv_reader = csv.DictReader(io.StringIO(csv_text))
+        return {
+            "status": "started",
+            "campaign_id": str(campaign.id),
+            "message": "Campaign processing started in background",
+            "headless": (
+                request.headless
+                if request.headless is not None
+                else "using config default"
+            ),
+        }
 
-        # Clean up header names
-        cleaned_rows = []
-        for row in csv_reader:
-            cleaned_row = {
-                key.strip().lower(): value for key, value in row.items() if key
-            }
-            cleaned_rows.append(cleaned_row)
-
-        # Extract URLs from CSV
-        urls = []
-        for row in cleaned_rows:
-            url = (
-                row.get("website")
-                or row.get("url")
-                or row.get("contact_url")
-                or row.get("site")
-                or row.get("domain")
-                or row.get("web")
-            )
-
-            if url:
-                url = url.strip()
-                if url and not url.startswith(("http://", "https://")):
-                    url = "http://" + url
-                urls.append(url)
-
-        if not urls:
-            headers_found = list(cleaned_rows[0].keys()) if cleaned_rows else []
-            raise HTTPException(
-                status_code=400,
-                detail=f"No valid URLs found. Headers found: {headers_found}",
-            )
-
-    except HTTPException as e:
-        raise e
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        print(f"[SUBMISSIONS ERROR] Failed to start automation: {e}")
+        traceback.print_exc()
 
-    # Create campaign
-    campaign = Campaign(
-        user_id=current_user.id,
-        name=f"Campaign {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
-        csv_filename=file.filename,
-        message="",
-        proxy=proxy,
-        use_captcha=(haltOnCaptcha.lower() != "false" if haltOnCaptcha else True),
-        status="running",
-        started_at=datetime.utcnow(),
-        total_urls=len(urls),
-        submitted_count=0,
-        failed_count=0,
-    )
+        # Update campaign status back to pending
+        if "campaign" in locals() and campaign:
+            campaign.status = "pending"
+            db.commit()
 
-    db.add(campaign)
-    db.flush()
-
-    # Create websites and submissions
-    for url in urls:
-        try:
-            parsed = urlparse(url)
-            domain = parsed.netloc or url
-        except:
-            domain = url
-
-        website = Website(
-            campaign_id=campaign.id,
-            user_id=current_user.id,
-            domain=domain,
-            contact_url=url,
-            status="pending",
-        )
-        db.add(website)
-        db.flush()
-
-        submission = Submission(
-            website_id=website.id,
-            campaign_id=campaign.id,
-            user_id=current_user.id,
-            url=url,
-            status="pending",
-        )
-        db.add(submission)
-
-    db.commit()
-
-    # START THE AUTOMATION IN BACKGROUND
-    from app.workers.processor import process_campaign
-
-    background_tasks.add_task(process_campaign, str(campaign.id))
-
-    return {
-        "success": True,
-        "message": f"Campaign started! Processing {len(urls)} URLs in background...",
-        "campaign_id": str(campaign.id),
-        "job_id": str(campaign.id),
-        "total_urls": len(urls),
-        "status": "processing",
-        "csv_filename": file.filename,
-    }
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/status/{campaign_id}")
@@ -186,6 +143,12 @@ async def get_campaign_status(
     db: Session = Depends(get_db),
 ):
     """Get campaign processing status"""
+
+    # Validate UUID format
+    try:
+        uuid.UUID(campaign_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid campaign ID format")
 
     # Verify ownership
     campaign = (
@@ -212,14 +175,72 @@ async def get_campaign_status(
         .count()
     )
 
+    failed = (
+        db.query(Submission)
+        .filter(Submission.campaign_id == campaign_id, Submission.status == "failed")
+        .count()
+    )
+
+    # Determine status
+    if campaign.status:
+        status = campaign.status
+    elif processed == total and total > 0:
+        status = "completed"
+    elif processed > 0:
+        status = "processing"
+    else:
+        status = "pending"
+
     return {
         "campaign_id": campaign_id,
+        "campaign_name": campaign.name,
+        "status": status,
         "total": total,
         "processed": processed,
         "successful": successful,
+        "failed": failed,
         "pending": total - processed,
         "progress_percent": round((processed / total * 100) if total > 0 else 0, 2),
-        "status": "completed" if processed == total else "processing",
+        "started_at": campaign.created_at.isoformat() if campaign.created_at else None,
+        "completed_at": (
+            campaign.completed_at.isoformat() if campaign.completed_at else None
+        ),
+    }
+
+
+@router.post("/stop/{campaign_id}")
+async def stop_campaign(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stop a running campaign"""
+
+    # Verify ownership
+    campaign = (
+        db.query(Campaign)
+        .filter(Campaign.id == campaign_id, Campaign.user_id == current_user.id)
+        .first()
+    )
+
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign.status != "processing":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campaign is not currently processing (status: {campaign.status})",
+        )
+
+    # Update status to stopped
+    campaign.status = "stopped"
+    campaign.completed_at = datetime.utcnow()
+    db.commit()
+
+    return {
+        "campaign_id": campaign_id,
+        "status": "stopped",
+        "message": "Campaign processing stopped",
     }
 
 
@@ -240,14 +261,24 @@ async def get_user_submissions(
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=100),
     status: Optional[str] = Query(None),
+    campaign_id: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get current user's submissions"""
+    """Get current user's submissions with optional filtering"""
     submission_service = SubmissionService(db)
+
+    # Build filters
+    filters = {}
+    if status:
+        filters["status"] = status
+    if campaign_id:
+        filters["campaign_id"] = campaign_id
+
     submissions, total = submission_service.get_user_submissions(
-        current_user.id, page, per_page, status
+        current_user.id, page, per_page, **filters
     )
+
     return SubmissionList(
         submissions=submissions, total=total, page=page, per_page=per_page
     )
@@ -296,3 +327,81 @@ async def update_submission(
         raise HTTPException(status_code=404, detail="Submission not found")
 
     return submission
+
+
+@router.delete("/{submission_id}")
+async def delete_submission(
+    submission_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete a submission"""
+    try:
+        submission_uuid = uuid.UUID(submission_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid submission ID")
+
+    submission = (
+        db.query(Submission)
+        .filter(
+            Submission.id == submission_uuid,
+            Submission.campaign_id.in_(
+                db.query(Campaign.id).filter(Campaign.user_id == current_user.id)
+            ),
+        )
+        .first()
+    )
+
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    db.delete(submission)
+    db.commit()
+
+    return {"message": "Submission deleted successfully"}
+
+
+@router.post("/retry/{submission_id}")
+async def retry_submission(
+    submission_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retry a failed submission"""
+    try:
+        submission_uuid = uuid.UUID(submission_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid submission ID")
+
+    submission = (
+        db.query(Submission)
+        .filter(
+            Submission.id == submission_uuid,
+            Submission.campaign_id.in_(
+                db.query(Campaign.id).filter(Campaign.user_id == current_user.id)
+            ),
+        )
+        .first()
+    )
+
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    if submission.status not in ["failed", "error"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only retry failed submissions (current status: {submission.status})",
+        )
+
+    # Reset submission status
+    submission.status = "pending"
+    submission.success = False
+    submission.error_message = None
+    submission.processed_at = None
+    db.commit()
+
+    return {
+        "submission_id": str(submission.id),
+        "status": "pending",
+        "message": "Submission queued for retry",
+    }

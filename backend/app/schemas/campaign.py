@@ -1,54 +1,50 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+# app/schemas/campaign.py
+
+from pydantic import BaseModel, validator
 from datetime import datetime
+from typing import Optional, List
 
 
 class CampaignCreate(BaseModel):
-    """Schema for creating a campaign"""
-
-    name: str = Field(..., max_length=255)
-    csv_filename: Optional[str] = Field(None, max_length=255)
+    name: str
     message: Optional[str] = None
-    proxy: Optional[str] = Field(None, max_length=255)
-    use_captcha: bool = True
+
+    @validator("name")
+    def name_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Campaign name cannot be empty")
+        return v.strip()
 
 
 class CampaignUpdate(BaseModel):
-    """Schema for updating a campaign"""
-
-    name: Optional[str] = Field(None, max_length=255)
-    csv_filename: Optional[str] = Field(None, max_length=255)
+    name: Optional[str] = None
     message: Optional[str] = None
-    proxy: Optional[str] = Field(None, max_length=255)
-    use_captcha: Optional[bool] = None
-    status: Optional[str] = Field(None, max_length=50)
+
+    @validator("name")
+    def name_must_not_be_empty(cls, v):
+        if v is not None and (not v or not v.strip()):
+            raise ValueError("Campaign name cannot be empty")
+        return v.strip() if v else None
 
 
 class CampaignResponse(BaseModel):
-    """Schema for campaign response"""
-
     id: str
-    user_id: str
     name: str
-    csv_filename: Optional[str] = None
-    started_at: Optional[datetime] = None
-    status: Optional[str] = None
     message: Optional[str] = None
-    proxy: Optional[str] = None
-    use_captcha: bool = True
+    status: str
     total_urls: int = 0
     submitted_count: int = 0
     failed_count: int = 0
+    started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    created_at: datetime
 
     class Config:
         from_attributes = True
 
 
 class CampaignList(BaseModel):
-    """Schema for paginated campaign list"""
-
     campaigns: List[CampaignResponse]
     total: int
-    page: int = 1
-    per_page: int = 10
+    page: int
+    per_page: int

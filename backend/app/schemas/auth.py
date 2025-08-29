@@ -1,35 +1,66 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, Literal
+# app/schemas/auth.py
+
+from pydantic import BaseModel, EmailStr, validator
 from datetime import datetime
+from typing import Optional
 
 
 class UserLogin(BaseModel):
-    """Schema for user login request"""
-
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str
+
+    @validator("email")
+    def email_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Email cannot be empty")
+        return v.lower().strip()
+
+    @validator("password")
+    def password_must_not_be_empty(cls, v):
+        if not v or len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
 
 
 class UserRegister(BaseModel):
-    """Schema for user registration request"""
-
     email: EmailStr
-    password: str = Field(..., min_length=6)
-    firstName: str = Field(..., min_length=1, max_length=100, alias="first_name")
-    lastName: str = Field(..., min_length=1, max_length=100, alias="last_name")
-    role: Optional[Literal["user", "admin", "owner"]] = "user"
+    password: str
+    first_name: str
+    last_name: str
+
+    @validator("email")
+    def email_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Email cannot be empty")
+        return v.lower().strip()
+
+    @validator("password")
+    def password_must_be_strong(cls, v):
+        if not v or len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+    @validator("first_name")
+    def first_name_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("First name cannot be empty")
+        return v.strip()
+
+    @validator("last_name")
+    def last_name_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Last name cannot be empty")
+        return v.strip()
 
 
 class UserResponse(BaseModel):
-    """Schema for user response data"""
-
     id: str
     email: str
-    first_name: str
-    last_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     role: str
     is_active: bool
-    created_at: datetime
+    created_at: Optional[datetime] = None
     subscription_status: Optional[str] = None
 
     class Config:
@@ -37,7 +68,6 @@ class UserResponse(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    """Schema for authentication response"""
-
     access_token: str
+    token_type: str = "bearer"
     user: UserResponse

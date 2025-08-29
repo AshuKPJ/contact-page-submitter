@@ -8,7 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
-    ARRAY,
+    # Remove ARRAY import - not compatible with SQLite
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -31,11 +31,16 @@ class Website(Base):
     contact_url = Column(Text, nullable=True)
     form_detected = Column(Boolean, nullable=True, default=False)
     form_type = Column(String(100), nullable=True)
-    form_labels = Column(ARRAY(String), nullable=True)
+
+    # Changed from ARRAY to JSON for SQLite compatibility
+    form_labels = Column(JSON, nullable=True, default=list)  # Was ARRAY(String)
     form_field_count = Column(Integer, nullable=True)
     has_captcha = Column(Boolean, nullable=True, default=False)
     captcha_type = Column(String(100), nullable=True)
-    form_name_variants = Column(ARRAY(String), nullable=True)
+
+    # Changed from ARRAY to JSON
+    form_name_variants = Column(JSON, nullable=True, default=list)  # Was ARRAY(String)
+
     status = Column(String(50), nullable=True)
     failure_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=True, default=func.current_timestamp())

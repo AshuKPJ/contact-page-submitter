@@ -9,14 +9,15 @@ import os
 class BrowserSettings(BaseSettings):
     """Browser automation settings"""
 
-    headless: bool = True
+    headless: bool = False  # Set to False to see browser in action
     viewport_width: int = 1920
     viewport_height: int = 1080
     page_load_timeout: int = 30000
     element_wait_timeout: int = 10000
     network_idle_timeout: int = 5000
-    max_concurrent: int = Field(5, ge=1, le=10)
+    max_concurrent: int = Field(1, ge=1, le=10)  # Set to 1 for demo visibility
     restart_after: int = 100
+    slow_mo: int = 500  # Add delay between actions to see what's happening
 
     class Config:
         env_prefix = "BROWSER_"
@@ -27,23 +28,25 @@ class Settings(BaseSettings):
     """Main application settings"""
 
     # Core - Using uppercase to match main.py expectations
-    APP_NAME: str = "Contact Page Submitter"
+    APP_NAME: str = "CPS - Contact Page Submitter"
     APP_VERSION: str = "1.0.0"
     ENVIRONMENT: str = Field(
         "development", pattern="^(development|staging|production)$"
     )
-    DEBUG: bool = False
+    DEBUG: bool = True
 
-    # Security - Using uppercase to match main.py expectations
-    SECRET_KEY: str = Field(..., min_length=32)
+    # Security - Using uppercase to match main.py expectations with defaults
+    SECRET_KEY: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
-    # Database
-    DATABASE_URL: str
+    # Database with default for development
+    DATABASE_URL: str = Field(default="sqlite:///./contact_submitter.db")
 
-    # CORS - Use alias to map from CORS_ORIGINS env var to cors_origins field
-    cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+    # CORS - Fixed parsing
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+    )
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
@@ -55,8 +58,11 @@ class Settings(BaseSettings):
     MAX_CSV_SIZE_MB: int = 50
     UPLOAD_FOLDER: str = "./uploads"
 
-    # CAPTCHA Settings - Moved directly to main settings
-    CAPTCHA_ENCRYPTION_KEY: str = Field(alias="CAPTCHA_ENCRYPTION_KEY")
+    # CAPTCHA Settings - Provide default for development
+    CAPTCHA_ENCRYPTION_KEY: str = Field(
+        default_factory=lambda: secrets.token_urlsafe(32),
+        alias="CAPTCHA_ENCRYPTION_KEY",
+    )
     CAPTCHA_DBC_API_URL: str = "http://api.dbcapi.me/api"
     CAPTCHA_SOLVE_TIMEOUT: int = 120
     CAPTCHA_RETRY_ATTEMPTS: int = 3
@@ -67,9 +73,26 @@ class Settings(BaseSettings):
     @property
     def CORS_ORIGINS(self) -> List[str]:
         """Get CORS origins as a list - uppercase for main.py compatibility"""
-        return [
-            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
-        ]
+        origins = []
+        if self.cors_origins:
+            for origin in self.cors_origins.split(","):
+                origin = origin.strip()
+                if origin:  # Only add non-empty origins
+                    origins.append(origin)
+
+        # Always include localhost and 127.0.0.1 variants in development
+        if self.ENVIRONMENT == "development":
+            default_origins = [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+            ]
+            for origin in default_origins:
+                if origin not in origins:
+                    origins.append(origin)
+
+        return origins
 
     # Add lowercase properties for backwards compatibility
     @property
@@ -94,15 +117,16 @@ class Settings(BaseSettings):
 
     @validator("SECRET_KEY")
     def validate_secret_key(cls, v, values):
-        if values.get("ENVIRONMENT") == "production" and v == "change-me":
-            raise ValueError("SECRET_KEY must be changed in production")
+        if values.get("ENVIRONMENT") == "production" and (not v or len(v) < 32):
+            raise ValueError("SECRET_KEY must be at least 32 characters in production")
         return v
 
     @validator("CAPTCHA_ENCRYPTION_KEY")
-    def validate_captcha_encryption_key(cls, v):
-        if not v or v == "change-me":
+    def validate_captcha_encryption_key(cls, v, values):
+        # Only enforce in production, allow defaults in development
+        if values.get("ENVIRONMENT") == "production" and (not v or len(v) < 32):
             raise ValueError(
-                "CAPTCHA_ENCRYPTION_KEY must be set in environment variables"
+                "CAPTCHA_ENCRYPTION_KEY must be at least 32 characters in production"
             )
         return v
 
@@ -115,29 +139,24 @@ class Settings(BaseSettings):
         """Validate that all required configuration is present"""
         errors = []
 
-        # Check required fields
-        if not self.SECRET_KEY or self.SECRET_KEY == "change-me":
-            errors.append("SECRET_KEY must be set and not be 'change-me'")
+        # Check required fields - more lenient for development
+        if self.ENVIRONMENT == "production":
+            if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+                errors.append("SECRET_KEY must be at least 32 characters in production")
 
-        if not self.DATABASE_URL:
-            errors.append("DATABASE_URL must be set")
+            if not self.CAPTCHA_ENCRYPTION_KEY or len(self.CAPTCHA_ENCRYPTION_KEY) < 32:
+                errors.append(
+                    "CAPTCHA_ENCRYPTION_KEY must be at least 32 characters in production"
+                )
 
-        if (
-            not self.CAPTCHA_ENCRYPTION_KEY
-            or self.CAPTCHA_ENCRYPTION_KEY == "change-me"
-        ):
-            errors.append("CAPTCHA_ENCRYPTION_KEY must be set and not be 'change-me'")
+            if self.DEBUG:
+                errors.append("DEBUG should be False in production")
 
         # Validate environment
         if self.ENVIRONMENT not in ["development", "staging", "production"]:
             errors.append(
                 "ENVIRONMENT must be one of: development, staging, production"
             )
-
-        # Production-specific validations
-        if self.ENVIRONMENT == "production":
-            if self.DEBUG:
-                errors.append("DEBUG should be False in production")
 
         if errors:
             error_msg = "Configuration validation failed:\n" + "\n".join(
@@ -148,12 +167,23 @@ class Settings(BaseSettings):
         print(
             f"[CONFIG] Configuration validated successfully for {self.ENVIRONMENT} environment"
         )
+        print(f"[CONFIG] CORS origins: {self.CORS_ORIGINS}")
+        print(f"[CONFIG] Database URL: {self.DATABASE_URL}")
+        print(f"[CONFIG] Browser headless: {self.browser.headless}")
+        print(f"[CONFIG] Browser slow_mo: {self.browser.slow_mo}ms")
 
 
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance"""
-    return Settings()
+    settings = Settings()
+    # Validate on creation in development to catch issues early
+    if settings.ENVIRONMENT == "development":
+        try:
+            settings.validate_config()
+        except ValueError as e:
+            print(f"[WARNING] Configuration issues detected: {e}")
+    return settings
 
 
 settings = get_settings()

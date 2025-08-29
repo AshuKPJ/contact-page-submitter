@@ -10,13 +10,13 @@ const getApiBaseUrl = () => {
     return import.meta.env.VITE_API_BASE;
   }
   
-  // Default to localhost for development
+  // Use 127.0.0.1 consistently to match backend
   const { protocol, hostname, port } = window.location;
   
   let apiUrl;
   if (port === "5173" || port === "3000") {
-    // Development mode - backend on port 8000
-    apiUrl = `${protocol}//${hostname}:8000`;
+    // Development mode - backend on port 8000, use 127.0.0.1 for consistency
+    apiUrl = `${protocol}//127.0.0.1:8000`;
   } else {
     // Production - use same origin
     apiUrl = `${protocol}//${hostname}${port ? ":" + port : ""}`;
@@ -32,6 +32,8 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  // Add withCredentials for CORS
+  withCredentials: false, // Set to false initially to avoid complexity
 });
 
 // Request interceptor to add auth token and logging
@@ -74,7 +76,7 @@ api.interceptors.response.use(
       console.log(`❌ ${error.config.method?.toUpperCase()} ${error.config.url} failed after ${duration}ms`);
     }
     
-    // Enhanced error logging
+    // Enhanced error logging with CORS detection
     if (error.response) {
       // Server responded with error status
       console.error(`Server error ${error.response.status}:`, error.response.data);
@@ -90,10 +92,24 @@ api.interceptors.response.use(
     } else if (error.request) {
       // Request was made but no response received
       console.error('No response received:', error.request);
+      
+      // Detect CORS issues specifically
+      if (error.message && error.message.toLowerCase().includes('network error')) {
+        console.error('🔴 CORS/Network Error Detected! Common causes:');
+        console.error('1. Backend server is not running on port 8000');
+        console.error('2. CORS policy is blocking the request');
+        console.error('3. Backend is not responding to OPTIONS requests');
+        console.error('4. Network connectivity issues');
+        
+        // Additional debugging info
+        console.error('Current API base URL:', getApiBaseUrl());
+        console.error('Request headers:', error.config?.headers);
+      }
+      
       console.error('This usually means:', [
         '1. Backend server is not running on port 8000',
         '2. Network connectivity issues',
-        '3. CORS issues',
+        '3. CORS issues - check browser console for CORS errors',
         '4. Backend is hanging/not responding'
       ]);
     } else {
@@ -133,6 +149,25 @@ export const debugApi = {
     }
   },
   
+  // Test CORS specifically
+  testCORS: async () => {
+    try {
+      console.log('Testing CORS with OPTIONS request...');
+      const response = await fetch(`${getApiBaseUrl()}/api/health`, {
+        method: 'OPTIONS',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('✅ CORS OPTIONS test successful:', response.status);
+      return { success: true, status: response.status };
+    } catch (error) {
+      console.error('❌ CORS test failed:', error.message);
+      return { success: false, error: error.message };
+    }
+  },
+  
   // Test login endpoint specifically
   testLogin: async (email, password) => {
     try {
@@ -154,7 +189,9 @@ export const debugApi = {
     return {
       baseURL: api.defaults.baseURL,
       timeout: api.defaults.timeout,
-      currentToken: localStorage.getItem("access_token") ? "Present" : "None"
+      currentToken: localStorage.getItem("access_token") ? "Present" : "None",
+      currentOrigin: window.location.origin,
+      targetOrigin: getApiBaseUrl()
     };
   },
 
@@ -163,10 +200,11 @@ export const debugApi = {
     console.log('🔍 Running full API diagnostic...');
     
     const results = {
+      config: debugApi.getConfig(),
+      cors: await debugApi.testCORS(),
       health: await debugApi.testConnection(),
       database: await debugApi.testDatabase(),
       login: email && password ? await debugApi.testLogin(email, password) : null,
-      config: debugApi.getConfig()
     };
     
     console.log('📊 Full test results:', results);
@@ -180,10 +218,16 @@ if (import.meta.env.MODE === 'development') {
   window.api = api;
   console.log('🔧 API debug tools available:');
   console.log('  - window.apiDebug.testConnection()');
+  console.log('  - window.apiDebug.testCORS()');
   console.log('  - window.apiDebug.testDatabase()');
   console.log('  - window.apiDebug.testLogin(email, password)');
   console.log('  - window.apiDebug.runFullTest(email, password)');
   console.log('  - window.apiDebug.getConfig()');
+  
+  // Auto-test connection on startup in development
+  setTimeout(() => {
+    debugApi.testConnection().catch(console.error);
+  }, 1000);
 }
 
 export default api;

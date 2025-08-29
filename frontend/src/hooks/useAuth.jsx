@@ -74,14 +74,27 @@ export const AuthProvider = ({ children }) => {
       
       let errorMessage = 'Login failed';
       
-      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      // Enhanced CORS error detection and messaging
+      if (error.code === 'ERR_NETWORK' || 
+          (error.message && error.message.toLowerCase().includes('network error'))) {
+        errorMessage = 'Cannot connect to server. Please ensure the backend is running on port 8000 and check for CORS issues.';
+        console.error('🔴 CORS/Network issue detected. Backend may not be running or CORS is blocking requests.');
+        
+        // Auto-run diagnostics
+        if (window.apiDebug) {
+          console.log('Running automatic diagnostics...');
+          window.apiDebug.runFullTest(email, password).catch(console.error);
+        }
+      } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
         errorMessage = 'Login request timed out. Please check your connection and try again.';
       } else if (error.response?.status === 408) {
         errorMessage = 'Login request timed out. Please try again.';
+      } else if (error.response?.status === 400) {
+        errorMessage = error.response.data?.detail || 'Invalid login credentials';
+      } else if (error.response?.status === 422) {
+        errorMessage = 'Invalid email or password format';
       } else if (error.response?.data?.detail) {
         errorMessage = error.response.data.detail;
-      } else if (error.message.includes('Network Error')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
       } else if (error.message) {
         errorMessage = error.message;
       }
@@ -127,14 +140,23 @@ export const AuthProvider = ({ children }) => {
       
       let errorMessage = 'Registration failed';
       
-      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      // Enhanced CORS error detection for registration
+      if (error.code === 'ERR_NETWORK' || 
+          (error.message && error.message.toLowerCase().includes('network error'))) {
+        errorMessage = 'Cannot connect to server. Please ensure the backend is running on port 8000.';
+        console.error('🔴 CORS/Network issue during registration. Backend may not be running.');
+      } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
         errorMessage = 'Registration request timed out. Please try again.';
       } else if (error.response?.status === 408) {
         errorMessage = 'Registration request timed out. Please try again.';
+      } else if (error.response?.status === 400) {
+        errorMessage = error.response.data?.detail || 'Registration failed - invalid data';
+      } else if (error.response?.status === 409) {
+        errorMessage = 'Email already exists. Please use a different email or try logging in.';
+      } else if (error.response?.status === 422) {
+        errorMessage = 'Invalid registration data format';
       } else if (error.response?.data?.detail) {
         errorMessage = error.response.data.detail;
-      } else if (error.message.includes('Network Error')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
       } else if (error.message) {
         errorMessage = error.message;
       }

@@ -66,6 +66,16 @@ async def get_campaign(
     return campaign
 
 
+@router.get("/{campaign_id}/details", response_model=CampaignResponse)
+async def get_campaign_details(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get detailed campaign information (alias for get_campaign)"""
+    return await get_campaign(campaign_id, current_user, db)
+
+
 @router.put("/{campaign_id}", response_model=CampaignResponse)
 async def update_campaign(
     campaign_id: str,
@@ -153,3 +163,23 @@ async def stop_campaign(
     campaign = campaign_service.stop_campaign(campaign_uuid, current_user.id)
 
     return {"message": "Campaign stopped successfully", "campaign": campaign}
+
+
+@router.get("/{campaign_id}/stats")
+async def get_campaign_stats(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get campaign statistics"""
+    import uuid
+
+    try:
+        campaign_uuid = uuid.UUID(campaign_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid campaign ID")
+
+    campaign_service = CampaignService(db)
+    stats = campaign_service.get_campaign_stats(campaign_uuid, current_user.id)
+
+    return stats
