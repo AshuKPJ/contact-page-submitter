@@ -405,3 +405,83 @@ async def retry_submission(
         "status": "pending",
         "message": "Submission queued for retry",
     }
+
+
+@router.post("/upload-and-start")
+async def upload_and_start_campaign(
+    file: UploadFile = File(...),
+    campaign_name: str = Form(...),
+    message: str = Form(None),
+    current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
+):
+    """Upload CSV and start campaign"""
+    try:
+        # Validate file
+        if not file.filename.endswith(".csv"):
+            raise HTTPException(status_code=400, detail="File must be a CSV")
+
+        # Read CSV
+        content = await file.read()
+        csv_data = content.decode("utf-8")
+
+        # Parse CSV
+        reader = csv.DictReader(io.StringIO(csv_data))
+        urls = []
+
+        for row in reader:
+            # Look for URL in various column names
+            url = (
+                row.get("website")
+                or row.get("url")
+                or row.get("Website")
+                or row.get("URL")
+            )
+            if url:
+                urls.append(url.strip())
+
+        if not urls:
+            raise HTTPException(status_code=400, detail="No URLs found in CSV")
+
+        # Create campaign
+        campaign = Campaign(
+            id=uuid.uuid4(),
+            user_id=current_user.id,
+            name=campaign_name,
+            message=message,
+            status="pending",
+            total_urls=len(urls),
+            created_at=datetime.utcnow(),
+        )
+        db.add(campaign)
+        db.flush()
+
+        # Create submissions
+        for url in urls:
+            submission = Submission(
+                id=uuid.uuid4(),
+                campaign_id=campaign.id,
+                user_id=current_user.id,
+                url=url,
+                status="pending",
+                created_at=datetime.utcnow(),
+            )
+            db.add(submission)
+
+        db.commit()
+
+        # Start processing in background
+        background_tasks.add_task(process_campaign, str(campaign.id))
+
+        return {
+            "status": "started",
+            "campaign_id": str(campaign.id),
+            "total_urls": len(urls),
+            "message": "Campaign processing started",
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to start campaign: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

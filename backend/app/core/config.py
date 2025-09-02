@@ -9,15 +9,19 @@ import os
 class BrowserSettings(BaseSettings):
     """Browser automation settings"""
 
-    headless: bool = False  # Set to False to see browser in action
+    headless: bool = True  # Set to False for debugging
     viewport_width: int = 1920
     viewport_height: int = 1080
     page_load_timeout: int = 30000
     element_wait_timeout: int = 10000
     network_idle_timeout: int = 5000
-    max_concurrent: int = Field(1, ge=1, le=10)  # Set to 1 for demo visibility
-    restart_after: int = 100
-    slow_mo: int = 500  # Add delay between actions to see what's happening
+    max_concurrent: int = 1  # Process one at a time for stability
+    slow_mo: int = 100  # Milliseconds between actions
+
+    # Anti-detection settings
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
 
     class Config:
         env_prefix = "BROWSER_"
