@@ -1,8 +1,6 @@
 // frontend/src/hooks/useAuth.jsx
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
-import toast from 'react-hot-toast';
 
 const AuthContext = createContext(null);
 
@@ -11,7 +9,6 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
 
-  // Check if user is already logged in on mount
   useEffect(() => {
     checkAuthStatus();
   }, []);
@@ -24,14 +21,9 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      console.log('Checking auth status with existing token...');
-      // Verify token is still valid - FIXED ENDPOINT
       const response = await api.get('/auth/me');
-      console.log('Auth check successful:', response.data);
       setUser(response.data);
     } catch (error) {
-      console.error('Auth check failed:', error);
-      // Clear invalid token
       localStorage.removeItem('access_token');
       setUser(null);
     } finally {
@@ -40,138 +32,104 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password) => {
-    if (loginLoading) {
-      console.warn('Login already in progress');
-      return false;
-    }
-
-    setLoginLoading(true);
+    console.log('[LOGIN] Attempting login for:', email);
     
     try {
-      console.log('Starting login for:', email);
-      console.log('API base URL:', api.defaults.baseURL);
+      const response = await api.post('/auth/login', { 
+        email: email.trim().toLowerCase(), 
+        password 
+      });
       
-      // Add a timeout specifically for the login request
-      const response = await Promise.race([
-        api.post('/auth/login', { email, password }),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Login request timed out after 30 seconds')), 30000)
-        )
-      ]);
-
-      console.log('Login response received:', response.data);
-
       if (response.data.access_token) {
         localStorage.setItem('access_token', response.data.access_token);
         setUser(response.data.user);
-        toast.success('Login successful!');
-        return true;
-      } else {
-        throw new Error('No access token received');
+        console.log('[LOGIN] Success');
+        return { success: true };
       }
+      
+      return { success: false, error: 'No token received' };
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('[LOGIN] Error:', error);
       
-      let errorMessage = 'Login failed';
+      // Determine error message
+      let errorMessage = 'Login failed. Please try again.';
       
-      // Enhanced CORS error detection and messaging
-      if (error.code === 'ERR_NETWORK' || 
-          (error.message && error.message.toLowerCase().includes('network error'))) {
-        errorMessage = 'Cannot connect to server. Please ensure the backend is running on port 8000 and check for CORS issues.';
-        console.error('🔴 CORS/Network issue detected. Backend may not be running or CORS is blocking requests.');
-        
-        // Auto-run diagnostics
-        if (window.apiDebug) {
-          console.log('Running automatic diagnostics...');
-          window.apiDebug.runFullTest(email, password).catch(console.error);
+      if (error.code === 'ERR_NETWORK') {
+        errorMessage = 'Cannot connect to server. Is it running on port 8000?';
+      } else if (error.response) {
+        switch (error.response.status) {
+          case 401:
+            errorMessage = 'Invalid email or password. Please check your credentials.';
+            break;
+          case 403:
+            errorMessage = 'Your account is restricted. Please contact support.';
+            break;
+          case 404:
+            errorMessage = 'Login service not found. Please try again later.';
+            break;
+          case 500:
+            errorMessage = 'Server error. Please try again in a moment.';
+            break;
+          default:
+            errorMessage = error.response.data?.detail || 'Login failed. Please try again.';
         }
-      } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-        errorMessage = 'Login request timed out. Please check your connection and try again.';
-      } else if (error.response?.status === 408) {
-        errorMessage = 'Login request timed out. Please try again.';
-      } else if (error.response?.status === 400) {
-        errorMessage = error.response.data?.detail || 'Invalid login credentials';
-      } else if (error.response?.status === 422) {
-        errorMessage = 'Invalid email or password format';
-      } else if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.message) {
-        errorMessage = error.message;
       }
       
-      toast.error(errorMessage);
-      return false;
-    } finally {
-      setLoginLoading(false);
+      return { success: false, error: errorMessage };
     }
   };
 
   const register = async (userData) => {
-    if (loginLoading) {
-      console.warn('Registration already in progress');
-      return false;
-    }
-
-    setLoginLoading(true);
+    console.log('[REGISTER] Attempting registration for:', userData.email);
     
     try {
-      console.log('Starting registration for:', userData.email);
+      const response = await api.post('/auth/register', {
+        ...userData,
+        email: userData.email.trim().toLowerCase()
+      });
       
-      // Add timeout for registration too
-      const response = await Promise.race([
-        api.post('/auth/register', userData),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Registration request timed out after 30 seconds')), 30000)
-        )
-      ]);
-
-      console.log('Registration response received:', response.data);
-
       if (response.data.access_token) {
         localStorage.setItem('access_token', response.data.access_token);
         setUser(response.data.user);
-        toast.success('Registration successful!');
-        return true;
-      } else {
-        throw new Error('No access token received');
+        console.log('[REGISTER] Success');
+        return { success: true };
       }
+      
+      return { success: false, error: 'Registration failed' };
     } catch (error) {
-      console.error('Registration error:', error);
+      console.error('[REGISTER] Error:', error);
       
-      let errorMessage = 'Registration failed';
+      let errorMessage = 'Registration failed. Please try again.';
       
-      // Enhanced CORS error detection for registration
-      if (error.code === 'ERR_NETWORK' || 
-          (error.message && error.message.toLowerCase().includes('network error'))) {
-        errorMessage = 'Cannot connect to server. Please ensure the backend is running on port 8000.';
-        console.error('🔴 CORS/Network issue during registration. Backend may not be running.');
-      } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-        errorMessage = 'Registration request timed out. Please try again.';
-      } else if (error.response?.status === 408) {
-        errorMessage = 'Registration request timed out. Please try again.';
-      } else if (error.response?.status === 400) {
-        errorMessage = error.response.data?.detail || 'Registration failed - invalid data';
-      } else if (error.response?.status === 409) {
-        errorMessage = 'Email already exists. Please use a different email or try logging in.';
-      } else if (error.response?.status === 422) {
-        errorMessage = 'Invalid registration data format';
-      } else if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.message) {
-        errorMessage = error.message;
+      if (error.code === 'ERR_NETWORK') {
+        errorMessage = 'Cannot connect to server. Is it running on port 8000?';
+      } else if (error.response) {
+        switch (error.response.status) {
+          case 400:
+            errorMessage = 'Invalid information. Please check all fields.';
+            break;
+          case 409:
+            errorMessage = 'This email is already registered. Please login instead.';
+            break;
+          case 422:
+            errorMessage = 'Please fill all required fields correctly.';
+            break;
+          case 500:
+            errorMessage = 'Server error. Please try again later.';
+            break;
+          default:
+            errorMessage = error.response.data?.detail || 'Registration failed.';
+        }
       }
       
-      toast.error(errorMessage);
-      return false;
-    } finally {
-      setLoginLoading(false);
+      return { success: false, error: errorMessage };
     }
   };
 
   const logout = () => {
     localStorage.removeItem('access_token');
     setUser(null);
-    toast.success('Logged out successfully');
+    window.location.href = '/';
   };
 
   const value = {

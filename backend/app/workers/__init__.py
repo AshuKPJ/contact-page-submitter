@@ -9,9 +9,6 @@ from datetime import datetime
 
 from .campaign_processor import CampaignProcessor
 
-# Use your existing logging
-from app.middleware.logging import api_logger
-
 # Windows compatibility
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -25,18 +22,13 @@ def process_campaign(campaign_id: str, headless: bool = None):
         campaign_id: The campaign ID to process
         headless: Whether to run browser in headless mode (None = use config default)
     """
-    # Use headless from config if not specified
     if headless is None:
         from app.core.config import settings
 
         headless = settings.browser.headless
 
-    # Log start
-    api_logger.log_worker_event(
-        "STARTING",
-        "CampaignProcessor",
-        f"Campaign: {campaign_id}, Headless: {headless}",
-    )
+    # Simple logging without the middleware
+    print(f"[WORKER] Starting campaign processing: {campaign_id}")
 
     processor = CampaignProcessor(campaign_id, headless)
 
@@ -45,21 +37,10 @@ def process_campaign(campaign_id: str, headless: bool = None):
 
     try:
         loop.run_until_complete(processor.run())
-
-        # Log success
-        api_logger.log_worker_event(
-            "COMPLETED",
-            "CampaignProcessor",
-            f"Campaign {campaign_id} processed successfully",
-        )
+        print(f"[WORKER] Campaign {campaign_id} completed successfully")
 
     except Exception as e:
-        # Log error
-        api_logger.log_error(
-            "CampaignProcessingError",
-            str(e),
-            {"campaign_id": campaign_id, "traceback": traceback.format_exc()},
-        )
+        print(f"[WORKER ERROR] Campaign {campaign_id} failed: {str(e)}")
 
         # Update campaign status to failed
         from app.core.database import SessionLocal

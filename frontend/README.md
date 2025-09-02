@@ -77,7 +77,7 @@ contact-page-submitter/
 │ │ ├── NewCampaignPage.jsx
 │ │ ├── OwnerDashboard.jsx
 │ │ ├── UserDashboard.jsx
-│ │ └── UserProfileForm.jsx
+│ │ └── ContactInformationForm.jsx
 │ ├── services/
 │ │ └── api.js
 │ ├── App.jsx

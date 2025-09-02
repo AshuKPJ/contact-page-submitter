@@ -1,44 +1,31 @@
 // src/App.jsx
 import React, { useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import AppLayout from "./components/layout/AppLayout";
-import LandingPage from "./pages/LandingPage";
-import DashboardPage from "./pages/DashboardPage";
-import CampaignsPage from "./pages/CampaignsPage";
-import CampaignDetailPage from "./pages/CampaignDetailPage";
-import UserProfileForm from "./pages/UserProfileForm";
-import AdminDashboard from "./pages/AdminDashboard";
-import OwnerDashboard from "./pages/OwnerDashboard";
-import UserDashboard from "./pages/UserDashboard";
-import FormSubmitterPage from "./pages/FormSubmitterPage";
+import { Toaster } from "react-hot-toast";
 import useAuth from "./hooks/useAuth";
 import AuthModal from "./components/AuthModal";
-import { Toaster } from "react-hot-toast";
+import AppLayout from "./components/layout/AppLayout";
 
-const ProtectedRoute = ({ children }) => {
-  const { user } = useAuth();
-  return user ? children : <Navigate to="/" replace />;
-};
+// Import existing pages
+import UserDashboard from "./pages/UserDashboard";
+import AdminDashboard from "./pages/AdminDashboard";
+import OwnerDashboard from "./pages/OwnerDashboard";
+import FormSubmitterPage from "./pages/FormSubmitterPage";
+import ContactInformationForm from "./pages/ContactInformationForm";
+import CampaignDetailPage from "./pages/CampaignDetailPage";
+import LandingPage from "./pages/LandingPage";
+import DashboardPage from "./pages/DashboardPage";
 
-const AdminRoute = ({ children }) => {
+const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { user } = useAuth();
-  return user && (user.role === "admin" || user.role === "owner")
-    ? children
-    : <Navigate to="/dashboard" replace />;
-};
-
-const OwnerRoute = ({ children }) => {
-  const { user } = useAuth();
-  return user?.role === "owner"
-    ? children
-    : <Navigate to="/dashboard" replace />;
-};
-
-const UserRoute = ({ children }) => {
-  const { user } = useAuth();
-  return user?.role === "user"
-    ? children
-    : <Navigate to="/dashboard" replace />;
+  
+  if (!user) return <Navigate to="/" replace />;
+  
+  if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  
+  return children;
 };
 
 const App = () => {
@@ -48,8 +35,8 @@ const App = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen text-lg">
-        Loading...
+      <div className="flex items-center justify-center h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
@@ -61,21 +48,31 @@ const App = () => {
 
   return (
     <>
+      // src/App.jsx (update just the Toaster configuration)
+
       <Toaster
         position="top-center"
         toastOptions={{
+          duration: 5000,
           style: {
-            padding: "12px 20px",
-            fontSize: "15px",
-            background: "#1f2937",
-            color: "#fff",
+            padding: "16px",
+            fontSize: "14px",
+            maxWidth: "500px",
+            background: "#ffffff",
+            color: "#1f2937",
+            border: "1px solid #e5e7eb",
             borderRadius: "8px",
-            boxShadow: "0 8px 25px rgba(0,0,0,0.2)",
+            boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
           },
           success: {
             iconTheme: {
               primary: "#10b981",
               secondary: "#ffffff",
+            },
+            style: {
+              background: "#f0fdf4",
+              color: "#166534",
+              border: "1px solid #86efac",
             },
           },
           error: {
@@ -83,6 +80,12 @@ const App = () => {
               primary: "#ef4444",
               secondary: "#ffffff",
             },
+            style: {
+              background: "#fef2f2",
+              color: "#991b1b",
+              border: "1px solid #fca5a5",
+            },
+            duration: 6000, // Errors stay longer
           },
         }}
       />
@@ -99,6 +102,7 @@ const App = () => {
             }
           />
 
+          {/* Main dashboard - renders based on user role */}
           <Route
             path="/dashboard"
             element={
@@ -107,14 +111,8 @@ const App = () => {
               </ProtectedRoute>
             }
           />
-          <Route
-            path="/campaigns"
-            element={
-              <ProtectedRoute>
-                <CampaignsPage />
-              </ProtectedRoute>
-            }
-          />
+          
+          {/* Common pages for all roles */}
           <Route
             path="/campaigns/:campaignId"
             element={
@@ -123,14 +121,25 @@ const App = () => {
               </ProtectedRoute>
             }
           />
+          
           <Route
-            path="/UserProfileForm"
+            path="/contact-info"
             element={
               <ProtectedRoute>
-                <UserProfileForm />
+                <ContactInformationForm />
               </ProtectedRoute>
             }
           />
+          
+          <Route
+            path="/ContactInformationForm"
+            element={
+              <ProtectedRoute>
+                <ContactInformationForm />
+              </ProtectedRoute>
+            }
+          />
+          
           <Route
             path="/form-submitter"
             element={
@@ -140,37 +149,43 @@ const App = () => {
             }
           />
 
-          <Route
-            path="/admin"
-            element={
-              <AdminRoute>
-                <AdminDashboard />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/owner"
-            element={
-              <OwnerRoute>
-                <OwnerDashboard />
-              </OwnerRoute>
-            }
-          />
+          {/* User specific routes */}
           <Route
             path="/user"
             element={
-              <UserRoute>
+              <ProtectedRoute allowedRoles={["user"]}>
                 <UserDashboard />
-              </UserRoute>
+              </ProtectedRoute>
             }
           />
 
+          {/* Admin specific routes */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute allowedRoles={["admin"]}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          
+          {/* Owner specific routes */}
+          <Route
+            path="/owner"
+            element={
+              <ProtectedRoute allowedRoles={["owner"]}>
+                <OwnerDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Catch all - redirect to home */}
           <Route path="*" element={<Navigate to="/" />} />
         </Route>
       </Routes>
 
       <AuthModal
-        show={showModal}
+        isOpen={showModal}
         onClose={() => setShowModal(false)}
         view={view}
         onSwitchView={setView}

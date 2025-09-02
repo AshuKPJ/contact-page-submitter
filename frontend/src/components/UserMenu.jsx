@@ -267,7 +267,7 @@ const UserMenu = ({ firstName, lastName, role, email, onLogout, enhanced = false
             </div>
 
             <a
-              href="/UserProfileForm"
+              href="/ContactInformationForm"
               className="flex items-center space-x-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
             >
               <User className="h-4 w-4" />

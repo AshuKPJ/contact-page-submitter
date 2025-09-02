@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import traceback
+from datetime import datetime
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
@@ -14,78 +15,74 @@ from app.services.auth_service import AuthService
 router = APIRouter()
 
 
-# Add explicit OPTIONS handler for login endpoint
-@router.options("/login")
-async def login_options():
-    """Handle preflight requests for login"""
-    return JSONResponse(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "86400",
-        },
-    )
-
-
-# Add explicit OPTIONS handler for register endpoint
-@router.options("/register")
-async def register_options():
-    """Handle preflight requests for register"""
-    return JSONResponse(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "86400",
-        },
-    )
-
-
 @router.post(
     "/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED
 )
 async def register(request: UserRegister, db: Session = Depends(get_db)):
-    """Register a new user"""
+    """Register a new user with comprehensive error handling"""
     try:
-        print(f"[AUTH] Registration attempt for email: {request.email}")
+        print(f"\n[AUTH ENDPOINT] ========== REGISTRATION REQUEST ==========")
+        print(f"[AUTH ENDPOINT] Email: {request.email}")
+        print(f"[AUTH ENDPOINT] Name: {request.first_name} {request.last_name}")
+        print(f"[AUTH ENDPOINT] Role: {request.role}")
+        print(f"[AUTH ENDPOINT] Timestamp: {datetime.utcnow().isoformat()}")
+
         auth_service = AuthService(db)
         result = await auth_service.register_user(request)
-        print(f"[AUTH] Registration successful for: {request.email}")
+
+        print(f"[AUTH ENDPOINT SUCCESS] Registration completed for: {request.email}")
+        print(f"[AUTH ENDPOINT] ========================================\n")
         return result
-    except Exception as e:
-        print(f"[AUTH ERROR] Registration failed: {str(e)}")
-        traceback.print_exc()
+
+    except HTTPException as e:
+        # Log and re-raise HTTP exceptions with their specific messages
+        print(f"[AUTH ENDPOINT ERROR] Registration failed with status {e.status_code}")
+        print(f"[AUTH ENDPOINT ERROR] Details: {e.detail}")
+        print(f"[AUTH ENDPOINT] ========================================\n")
         raise
+
+    except Exception as e:
+        # Log unexpected errors
+        print(f"[AUTH ENDPOINT CRITICAL] Unexpected registration error: {str(e)}")
+        traceback.print_exc()
+        print(f"[AUTH ENDPOINT] ========================================\n")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Registration failed. Please try again or contact support if the problem persists.",
+        )
 
 
 @router.post("/login", response_model=AuthResponse)
 async def login(request: UserLogin, db: Session = Depends(get_db)):
-    """Authenticate user and return access token"""
+    """Authenticate user with comprehensive error handling"""
     try:
-        print(f"[AUTH] Login attempt for email: {request.email}")
+        print(f"\n[AUTH ENDPOINT] ========== LOGIN REQUEST ==========")
+        print(f"[AUTH ENDPOINT] Email: {request.email}")
+        print(f"[AUTH ENDPOINT] Timestamp: {datetime.utcnow().isoformat()}")
+
         auth_service = AuthService(db)
         result = await auth_service.login_user(request)
-        print(f"[AUTH] Login successful for: {request.email}")
+
+        print(f"[AUTH ENDPOINT SUCCESS] Login completed for: {request.email}")
+        print(f"[AUTH ENDPOINT] ====================================\n")
         return result
+
     except HTTPException as e:
-        print(f"[AUTH ERROR] Login failed for {request.email}: {e.detail}")
+        # Log and re-raise HTTP exceptions with their specific messages
+        print(f"[AUTH ENDPOINT ERROR] Login failed with status {e.status_code}")
+        print(f"[AUTH ENDPOINT ERROR] Details: {e.detail}")
+        print(f"[AUTH ENDPOINT] ====================================\n")
         raise
+
     except Exception as e:
-        print(f"[AUTH ERROR] Unexpected login error: {str(e)}")
+        # Log unexpected errors
+        print(f"[AUTH ENDPOINT CRITICAL] Unexpected login error: {str(e)}")
         traceback.print_exc()
+        print(f"[AUTH ENDPOINT] ====================================\n")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during login",
+            detail="Login failed. Please check your internet connection and try again.",
         )
-
-
-@router.post("/logout")
-async def logout():
-    """Logout user (client-side token removal)"""
-    return {"message": "Successfully logged out"}
 
 
 @router.get("/me", response_model=UserResponse)
@@ -94,7 +91,8 @@ async def get_current_user_info(
 ):
     """Get current authenticated user info"""
     try:
-        print(f"[AUTH] Getting user info for: {current_user.email}")
+        print(f"[AUTH ENDPOINT] Fetching user info for: {current_user.email}")
+
         return UserResponse(
             id=str(current_user.id),
             email=current_user.email,
@@ -105,10 +103,21 @@ async def get_current_user_info(
             created_at=current_user.created_at,
             subscription_status=current_user.subscription_status,
         )
+
     except Exception as e:
-        print(f"[AUTH ERROR] Failed to get user info: {str(e)}")
+        print(f"[AUTH ENDPOINT ERROR] Failed to get user info: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user information",
+            detail="Failed to retrieve user information. Please try logging in again.",
         )
+
+
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    """Logout user"""
+    print(f"[AUTH ENDPOINT] User logged out: {current_user.email}")
+    return {
+        "message": "Successfully logged out",
+        "detail": "Your session has been terminated. Please login again to continue.",
+    }
