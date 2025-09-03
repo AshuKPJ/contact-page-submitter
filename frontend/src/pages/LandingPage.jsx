@@ -219,7 +219,7 @@ const LandingPage = ({ onLogin, onRegister }) => {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <img
-                className="h-10 w-auto"
+                className="h-20 w-auto margin-top: 12px;"
                 src="/assets/images/CPS_Header_Logo.png"
                 alt="Contact Page Submitter"
               />

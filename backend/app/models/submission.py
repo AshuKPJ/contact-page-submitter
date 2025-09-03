@@ -1,11 +1,33 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text, UUID, ForeignKey, Boolean
+# backend/app/models/submission.py
+from sqlalchemy import (
+    Column,
+    String,
+    Integer,
+    DateTime,
+    Text,
+    UUID,
+    ForeignKey,
+    Boolean,
+    Enum,
+)
 from sqlalchemy.orm import relationship
 import uuid
+import enum
+from datetime import datetime
+
 from app.core.database import Base
+
+
+class SubmissionStatus(enum.Enum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+    RETRYING = "retrying"
+
 
 class Submission(Base):
     __tablename__ = "submissions"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
@@ -13,7 +35,7 @@ class Submission(Base):
     url = Column(String(500), nullable=True)
     contact_method = Column(String(50), nullable=True)
     email_extracted = Column(String(255), nullable=True)
-    status = Column(String(50), default="pending")
+    status = Column(Enum(SubmissionStatus), default=SubmissionStatus.PENDING)
     success = Column(Boolean, default=False)
     response_status = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -21,11 +43,11 @@ class Submission(Base):
     captcha_encountered = Column(Boolean, default=False)
     captcha_solved = Column(Boolean, default=False)
     retry_count = Column(Integer, default=0)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     submitted_at = Column(DateTime, nullable=True)
     processed_at = Column(DateTime, nullable=True)
-    
+
     # Relationships
     campaign = relationship("Campaign", back_populates="submissions")
     user = relationship("User", back_populates="submissions")

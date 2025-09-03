@@ -26,7 +26,7 @@ const AppLayout = () => {
   return (
     <>
       <Header onLoginClick={openLogin} onRegisterClick={openRegister} />
-      <div className="min-h-screen bg-white pt-[130px]">
+      <div className="min-h-screen bg-white pt-[90px]">
         <Outlet />
       </div>
       <Footer />

@@ -7,10 +7,10 @@ const Footer = () => {
     <footer className="bg-gray-800 text-gray-300">
       <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center text-center space-y-8">
-          {/* Logo */}
+          {/* Logo - Made smaller to let header logo be more prominent */}
           <div className="flex items-center space-x-2">
             <img
-              className="h-20"
+              className="h-12"
               src="/assets/images/CPS_footer_logo.png"
               alt="CPS Logo"
             />

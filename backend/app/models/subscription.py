@@ -1,34 +1,10 @@
-from sqlalchemy import (
-    Column,
-    String,
-    DateTime,
-    UUID,
-    ForeignKey,
-    Integer,
-    Numeric,
-    JSON,
-)
+# backend/app/models/subscription.py
+from sqlalchemy import Column, String, DateTime, UUID, ForeignKey
 from sqlalchemy.orm import relationship
 import uuid
+from datetime import datetime
 
 from app.core.database import Base
-
-
-class SubscriptionPlan(Base):
-    """Subscription plan model"""
-
-    __tablename__ = "subscription_plans"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(50), nullable=False)
-    max_websites = Column(Integer, nullable=True)
-    max_submissions_per_day = Column(Integer, nullable=True)
-    price = Column(Numeric(10, 2), nullable=True)
-    features = Column(JSON, nullable=True)
-
-    # Relationships
-    users = relationship("User", foreign_keys="[User.plan_id]", back_populates="plan")
-    subscriptions = relationship("Subscription", back_populates="plan")
 
 
 class Subscription(Base):
@@ -37,14 +13,18 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    plan_id = Column(
-        UUID(as_uuid=True), ForeignKey("subscription_plans.id"), nullable=True
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, unique=True
     )
-    status = Column(String(50), nullable=True)
-    start_date = Column(DateTime, nullable=True)
+    plan_id = Column(
+        UUID(as_uuid=True), ForeignKey("subscription_plans.id"), nullable=False
+    )
+    status = Column(String(50), nullable=False, default="active")
+    start_date = Column(DateTime, default=datetime.utcnow)
     end_date = Column(DateTime, nullable=True)
-    external_id = Column(String(255), nullable=True)
+    external_id = Column(String(255), nullable=True)  # For payment provider IDs
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="subscription")
