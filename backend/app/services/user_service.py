@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
 from app.models.user import User
-from app.models.user_profile import UserProfile, UserContactProfile
+from app.models.user_profile import UserProfile, UserProfile
 from app.schemas.user import UserProfileCreate, UserContactProfileCreate
 from app.core.security import hash_password
 from app.core.encryption import encryption_service
@@ -60,12 +60,10 @@ class UserService:
 
     def create_contact_profile(
         self, user_id: uuid.UUID, profile_data: UserContactProfileCreate
-    ) -> UserContactProfile:
+    ) -> UserProfile:
         """Create or update user contact profile"""
         existing_profile = (
-            self.db.query(UserContactProfile)
-            .filter(UserContactProfile.user_id == user_id)
-            .first()
+            self.db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
         )
 
         if existing_profile:
@@ -79,7 +77,7 @@ class UserService:
             return existing_profile
         else:
             # Create new profile
-            profile = UserContactProfile(
+            profile = UserProfile(
                 user_id=user_id, **profile_data.dict(exclude_unset=True)
             )
 
@@ -108,13 +106,9 @@ class UserService:
         """Get user profile"""
         return self.db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
 
-    def get_contact_profile(self, user_id: uuid.UUID) -> Optional[UserContactProfile]:
+    def get_contact_profile(self, user_id: uuid.UUID) -> Optional[UserProfile]:
         """Get user contact profile"""
-        return (
-            self.db.query(UserContactProfile)
-            .filter(UserContactProfile.user_id == user_id)
-            .first()
-        )
+        return self.db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
 
     def delete_user(self, user_id: uuid.UUID) -> bool:
         """Delete a user and all related data"""

@@ -1,4 +1,4 @@
-// src/App.jsx
+// src/App.jsx - Updated with Campaigns Route
 import React, { useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
@@ -15,6 +15,9 @@ import ContactInformationForm from "./pages/ContactInformationForm";
 import CampaignDetailPage from "./pages/CampaignDetailPage";
 import LandingPage from "./pages/LandingPage";
 import DashboardPage from "./pages/DashboardPage";
+
+// Import new Campaigns page
+import CampaignsPage from "./pages/CampaignsPage";
 
 const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { user } = useAuth();
@@ -48,8 +51,6 @@ const App = () => {
 
   return (
     <>
-      // src/App.jsx (update just the Toaster configuration)
-
       <Toaster
         position="top-center"
         toastOptions={{
@@ -85,7 +86,7 @@ const App = () => {
               color: "#991b1b",
               border: "1px solid #fca5a5",
             },
-            duration: 6000, // Errors stay longer
+            duration: 6000,
           },
         }}
       />
@@ -111,8 +112,18 @@ const App = () => {
               </ProtectedRoute>
             }
           />
+
+          {/* NEW: Campaigns list page */}
+          <Route
+            path="/campaigns"
+            element={
+              <ProtectedRoute>
+                <CampaignsPage />
+              </ProtectedRoute>
+            }
+          />
           
-          {/* Common pages for all roles */}
+          {/* Individual campaign detail */}
           <Route
             path="/campaigns/:campaignId"
             element={

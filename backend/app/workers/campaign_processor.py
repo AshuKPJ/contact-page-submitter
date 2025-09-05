@@ -7,7 +7,7 @@ import uuid
 from app.core.database import SessionLocal
 from app.models.campaign import Campaign
 from app.models.submission import Submission
-from app.models.user_profile import UserContactProfile
+from app.models.user_profile import UserProfile
 from app.services.browser_automation_service import BrowserAutomationService
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,8 @@ class CampaignProcessor:
 
             # Get user contact profile
             user_profile = (
-                self.db.query(UserContactProfile)
-                .filter(UserContactProfile.user_id == campaign.user_id)
+                self.db.query(UserProfile)
+                .filter(UserProfile.user_id == campaign.user_id)
                 .first()
             )
 

@@ -108,8 +108,8 @@ POST /api/auth/login - User authentication
 POST /api/auth/register - User registration
 GET /api/auth/me - Get current user
 POST /api/submit/start - Start form submission campaign
-GET /api/usercontactprofile/contact-answers - Get user profile
-POST /api/usercontactprofile/upsert - Update user profile
+GET /api/UserProfile/contact-answers - Get user profile
+POST /api/UserProfile/upsert - Update user profile
 GET /api/campaigns - List campaigns
 POST /api/campaigns/create - Create new campaign
 

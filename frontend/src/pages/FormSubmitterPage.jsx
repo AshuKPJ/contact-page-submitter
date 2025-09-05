@@ -1,4 +1,4 @@
-// src/pages/FormSubmitterPage.jsx
+// src/pages/FormSubmitterPage.jsx - Fixed CSV Reading
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -14,6 +14,7 @@ const FormSubmitterPage = () => {
   const [dragActive, setDragActive] = useState(false);
   const [csvPreview, setCsvPreview] = useState(null);
   const [campaignActive, setCampaignActive] = useState(false);
+  const [parseError, setParseError] = useState(null);
   const fileInputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -36,28 +37,80 @@ const FormSubmitterPage = () => {
     }
   };
 
-  const handleFile = (file) => {
+  const parseCSV = (text) => {
+    const lines = text.trim().split('\n');
+    if (lines.length === 0) return null;
+
+    // Get headers from first line
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+    
+    // Check if 'website' column exists
+    const websiteIndex = headers.findIndex(h => 
+      h.toLowerCase().includes('website') || 
+      h.toLowerCase().includes('url') ||
+      h.toLowerCase().includes('domain')
+    );
+
+    if (websiteIndex === -1) {
+      throw new Error("CSV must contain a 'website', 'url', or 'domain' column");
+    }
+
+    // Parse data rows
+    const rows = [];
+    for (let i = 1; i < Math.min(lines.length, 6); i++) { // Show first 5 rows
+      const columns = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
+      if (columns[websiteIndex] && columns[websiteIndex].length > 0) {
+        rows.push(columns);
+      }
+    }
+
+    return {
+      headers,
+      rows,
+      totalRows: Math.max(0, lines.length - 1), // Total rows minus header
+      websiteColumnIndex: websiteIndex,
+      websiteColumnName: headers[websiteIndex]
+    };
+  };
+
+  const handleFile = async (file) => {
     if (!file.name.toLowerCase().endsWith('.csv')) {
-      alert('Please select a CSV file');
+      setParseError('Please select a CSV file');
       return;
     }
     
     if (file.size > 10 * 1024 * 1024) {
-      alert('File size must be less than 10MB');
+      setParseError('File size must be less than 10MB');
       return;
     }
     
+    setParseError(null);
     setCsvFile(file);
-    // Simulate CSV preview
-    setCsvPreview({
-      headers: ['website'],
-      rows: [
-        ['https://example.com'],
-        ['https://demo.com'],
-        ['https://test.com']
-      ],
-      totalRows: Math.floor(Math.random() * 1000) + 100
-    });
+    
+    try {
+      // Read the file content
+      const text = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
+
+      // Parse CSV content
+      const parsedData = parseCSV(text);
+      
+      if (!parsedData) {
+        throw new Error('Failed to parse CSV file');
+      }
+
+      setCsvPreview(parsedData);
+      
+    } catch (error) {
+      console.error('Error parsing CSV:', error);
+      setParseError(error.message || 'Failed to parse CSV file');
+      setCsvFile(null);
+      setCsvPreview(null);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -84,6 +137,7 @@ const FormSubmitterPage = () => {
   const clearFile = () => {
     setCsvFile(null);
     setCsvPreview(null);
+    setParseError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -202,7 +256,7 @@ const FormSubmitterPage = () => {
                         <FileText className="w-16 h-16 text-green-600 mx-auto mb-4" />
                         <p className="text-lg font-semibold text-gray-900">{csvFile.name}</p>
                         <p className="text-sm text-gray-500 mt-1">
-                          {(csvFile.size / 1024).toFixed(2)} KB • {csvPreview?.totalRows} websites
+                          {(csvFile.size / 1024).toFixed(2)} KB • {csvPreview?.totalRows || 0} websites
                         </p>
                         <button
                           onClick={(e) => {
@@ -229,13 +283,26 @@ const FormSubmitterPage = () => {
                   </div>
                 </div>
 
+                {/* Error Display */}
+                {parseError && (
+                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center">
+                      <AlertCircle className="w-5 h-5 text-red-600 mr-3" />
+                      <div>
+                        <p className="font-semibold text-red-900">Error parsing CSV</p>
+                        <p className="text-sm text-red-700">{parseError}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* File Requirements */}
                 <div className="mt-6 p-4 bg-blue-50 rounded-lg">
                   <h3 className="text-sm font-semibold text-blue-900 mb-2">File Requirements</h3>
                   <ul className="text-sm text-blue-700 space-y-1">
                     <li className="flex items-center">
                       <CheckCircle className="w-4 h-4 mr-2" />
-                      CSV format with 'website' column
+                      CSV format with 'website', 'url', or 'domain' column
                     </li>
                     <li className="flex items-center">
                       <CheckCircle className="w-4 h-4 mr-2" />
@@ -258,7 +325,7 @@ const FormSubmitterPage = () => {
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                            Website URL
+                            {csvPreview.websiteColumnName} ({csvPreview.totalRows} total)
                           </th>
                         </tr>
                       </thead>
@@ -267,15 +334,17 @@ const FormSubmitterPage = () => {
                           <tr key={idx}>
                             <td className="px-4 py-3 text-sm text-gray-600">
                               <Globe className="w-4 h-4 inline mr-2 text-gray-400" />
-                              {row[0]}
+                              {row[csvPreview.websiteColumnIndex]}
                             </td>
                           </tr>
                         ))}
-                        <tr className="bg-gray-50">
-                          <td className="px-4 py-3 text-sm text-gray-500 italic">
-                            ... and {csvPreview.totalRows - 3} more websites
-                          </td>
-                        </tr>
+                        {csvPreview.totalRows > csvPreview.rows.length && (
+                          <tr className="bg-gray-50">
+                            <td className="px-4 py-3 text-sm text-gray-500 italic">
+                              ... and {csvPreview.totalRows - csvPreview.rows.length} more websites
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -315,7 +384,7 @@ const FormSubmitterPage = () => {
             </div>
           </div>
 
-          {/* Sidebar */}
+          {/* Sidebar - Same as before */}
           <div className="lg:col-span-1 space-y-6">
             {/* Stats Grid */}
             <div className="bg-white rounded-lg shadow-sm border p-6">

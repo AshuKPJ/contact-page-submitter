@@ -1,5 +1,5 @@
 # backend/app/models/subscription.py
-from sqlalchemy import Column, String, DateTime, UUID, ForeignKey
+from sqlalchemy import Column, String, DateTime, UUID, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -14,11 +14,11 @@ class Subscription(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, unique=True
-    )
+        Integer, ForeignKey("users.id"), nullable=False, unique=True
+    )  # Changed from UUID to Integer
     plan_id = Column(
-        UUID(as_uuid=True), ForeignKey("subscription_plans.id"), nullable=False
-    )
+        Integer, ForeignKey("subscription_plans.id"), nullable=False
+    )  # Changed from UUID to Integer
     status = Column(String(50), nullable=False, default="active")
     start_date = Column(DateTime, default=datetime.utcnow)
     end_date = Column(DateTime, nullable=True)

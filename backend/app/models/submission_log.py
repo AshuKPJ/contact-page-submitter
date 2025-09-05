@@ -23,7 +23,9 @@ class SubmissionLog(Base):
     submission_id = Column(
         UUID(as_uuid=True), ForeignKey("submissions.id"), nullable=True
     )
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )  # UUID to match users.id
     website_id = Column(UUID(as_uuid=True), ForeignKey("websites.id"), nullable=True)
     target_url = Column(String(500), nullable=True)
     action = Column(String(255), nullable=False)
@@ -33,6 +35,3 @@ class SubmissionLog(Base):
 
     # Relationships
     user = relationship("User", back_populates="submission_logs")
-
-
-# DO NOT ADD ANY OTHER CLASSES HERE - The duplicate Log class was deleted

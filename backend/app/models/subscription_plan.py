@@ -1,8 +1,7 @@
 # backend/app/models/subscription_plan.py
-from sqlalchemy import Column, String, DateTime, UUID, Integer, Numeric, JSON, Boolean
+from sqlalchemy import Column, String, DateTime, Integer, Numeric, JSON, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
-import uuid
 
 from app.core.database import Base
 
@@ -10,7 +9,9 @@ from app.core.database import Base
 class SubscriptionPlan(Base):
     __tablename__ = "subscription_plans"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        Integer, primary_key=True, index=True
+    )  # Changed from UUID to Integer to match database
     name = Column(String(100), nullable=False)
     description = Column(String(500))
     max_websites = Column(Integer, nullable=True)
@@ -24,5 +25,5 @@ class SubscriptionPlan(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    users = relationship("User", back_populates="plan")
+    users = relationship("User", back_populates="subscription_plan")
     subscriptions = relationship("Subscription", back_populates="plan")

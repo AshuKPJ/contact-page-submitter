@@ -90,7 +90,7 @@ class User(Base):
     submissions = relationship("Submission", back_populates="user", cascade="all, delete-orphan")
     websites = relationship("Website", back_populates="user", cascade="all, delete-orphan")
     user_profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    user_contact_profile = relationship("UserContactProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    user_profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     system_logs = relationship("SystemLog", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("Settings", back_populates="user", cascade="all, delete-orphan")
     submission_logs = relationship("SubmissionLog", back_populates="user", cascade="all, delete-orphan")

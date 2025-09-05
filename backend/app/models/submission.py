@@ -30,7 +30,9 @@ class Submission(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )  # UUID to match users.id
     website_id = Column(UUID(as_uuid=True), ForeignKey("websites.id"), nullable=True)
     url = Column(String(500), nullable=True)
     contact_method = Column(String(50), nullable=True)

@@ -26,11 +26,11 @@ class DatabaseHandler:
 
     def get_user_profile(self, user_id: str) -> Dict[str, Any]:
         """Get user contact profile for form filling"""
-        from app.models.user_profile import UserContactProfile
+        from app.models.user_profile import UserProfile
 
         profile = (
-            self.session.query(UserContactProfile)
-            .filter(UserContactProfile.user_id == user_id)
+            self.session.query(UserProfile)
+            .filter(UserProfile.user_id == user_id)
             .first()
         )
 

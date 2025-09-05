@@ -15,7 +15,7 @@ import uuid
 import enum
 from datetime import datetime
 
-from app.core.database import Base  # Fixed import path
+from app.core.database import Base
 
 
 class CampaignStatus(enum.Enum):
@@ -30,7 +30,9 @@ class Campaign(Base):
     __tablename__ = "campaigns"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )  # UUID to match users.id
     name = Column(String(255), nullable=False)
     message = Column(Text, nullable=True)
     status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT)
@@ -47,6 +49,4 @@ class Campaign(Base):
     submissions = relationship(
         "Submission", back_populates="campaign", cascade="all, delete-orphan"
     )
-    websites = relationship(
-        "Website", back_populates="campaign"
-    )  # Added this relationship
+    websites = relationship("Website", back_populates="campaign")

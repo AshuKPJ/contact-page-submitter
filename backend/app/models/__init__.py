@@ -1,53 +1,53 @@
-# backend/app/models/__init__.py
-
-# Simple fix: Import only from files that exist and avoid duplicates
+# app/models/__init__.py
 
 # Core models
-from .user_profile import UserContactProfile, UserProfile
+from .user_profile import UserProfile  # both exist
 from .user import User, UserRole
-
-# Choose ONE source for SubscriptionPlan - use standalone file
 from .subscription_plan import SubscriptionPlan
-
-# Other models
 from .website import Website
-from .campaign import Campaign, CampaignStatus
 from .submission import Submission, SubmissionStatus
-from .submission_log import (
-    SubmissionLog,
-)  # Make sure Log class is deleted from this file
-from .captcha_log import CaptchaLog
-
-# Use your existing combined settings and logs file
+from .submission_log import SubmissionLog
 from .settings_and_logs import SystemLog, Settings, Log
 
-# Import Subscription class (separate from SubscriptionPlan)
+# Optional modules: import only if present
 try:
-    from .subscription import Subscription
+    from .campaign import Campaign, CampaignStatus  # keep if you have campaign.py
+
+    HAS_CAMPAIGN = True
+except Exception:
+    HAS_CAMPAIGN = False
+
+try:
+    from .captcha_log import CaptchaLog  # keep if you have captcha_log.py
+
+    HAS_CAPTCHA_LOG = True
+except Exception:
+    HAS_CAPTCHA_LOG = False
+
+try:
+    from .subscription import Subscription  # exists in your tree
 
     HAS_SUBSCRIPTION = True
-except ImportError:
+except Exception:
     HAS_SUBSCRIPTION = False
 
-# Export models
 __all__ = [
     "User",
     "UserRole",
     "UserProfile",
-    "UserContactProfile",
-    "Campaign",
-    "CampaignStatus",
     "Submission",
-    "SubmissionLog",
     "SubmissionStatus",
-    "CaptchaLog",
-    "Log",
+    "SubmissionLog",
     "SystemLog",
     "Settings",
+    "Log",
     "Website",
     "SubscriptionPlan",
 ]
 
-# Add Subscription to exports if it exists
 if HAS_SUBSCRIPTION:
     __all__.append("Subscription")
+if HAS_CAMPAIGN:
+    __all__ += ["Campaign", "CampaignStatus"]
+if HAS_CAPTCHA_LOG:
+    __all__.append("CaptchaLog")

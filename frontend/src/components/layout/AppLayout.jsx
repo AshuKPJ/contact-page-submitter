@@ -1,44 +1,23 @@
 // src/components/layout/AppLayout.jsx
-
-import React, { useState } from "react";
-import { Outlet } from "react-router-dom";
-import Header from "./Header";
-import Footer from "./Footer";
-import AuthModal from "../AuthModal";
-import useAuth from "../../hooks/useAuth";
+import React from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
+import Navigation from '../Navigation';
+import useAuth from '../../hooks/useAuth';
 
 const AppLayout = () => {
-  const { login, register } = useAuth();
+  const { user } = useAuth();
+  const location = useLocation();
 
-  const [showModal, setShowModal] = useState(false);
-  const [view, setView] = useState("login");
-
-  const openLogin = () => {
-    setView("login");
-    setShowModal(true);
-  };
-
-  const openRegister = () => {
-    setView("register");
-    setShowModal(true);
-  };
+  // Show navigation for authenticated users, except on landing page
+  const showNavigation = user && location.pathname !== '/';
 
   return (
-    <>
-      <Header onLoginClick={openLogin} onRegisterClick={openRegister} />
-      <div className="min-h-screen bg-white pt-[90px]">
+    <div className="min-h-screen bg-gray-50">
+      {showNavigation && <Navigation />}
+      <main>
         <Outlet />
-      </div>
-      <Footer />
-      <AuthModal
-        isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        view={view}
-        onSwitchView={setView}
-        onLogin={login}
-        onRegister={register}
-      />
-    </>
+      </main>
+    </div>
   );
 };
 

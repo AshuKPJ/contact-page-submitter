@@ -21,7 +21,9 @@ class Website(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )  # UUID to match users.id
     domain = Column(String(255), nullable=False)
     contact_url = Column(String(500), nullable=True)
     form_detected = Column(Boolean, default=False)
@@ -35,7 +37,7 @@ class Website(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationships - fixed to match campaign.py expectations
+    # Relationships
     campaign = relationship("Campaign", back_populates="websites")
     user = relationship("User", back_populates="websites")
     submissions = relationship("Submission", back_populates="website")
