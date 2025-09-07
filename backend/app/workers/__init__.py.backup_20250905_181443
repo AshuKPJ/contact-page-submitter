@@ -23,8 +23,7 @@ def process_campaign(campaign_id: str, headless: bool = None):
         headless: Whether to run browser in headless mode (None = use config default)
     """
     if headless is None:
-        from app.core.config import get_settings
-settings = get_settings()
+        from app.core.config import settings
 
         headless = settings.browser.headless
 
@@ -66,8 +65,7 @@ settings = get_settings()
 async def async_process_campaign(campaign_id: str, headless: bool = None):
     """Async version for when already in async context"""
     if headless is None:
-        from app.core.config import get_settings
-settings = get_settings()
+        from app.core.config import settings
 
         headless = settings.browser.headless
 

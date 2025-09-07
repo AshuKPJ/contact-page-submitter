@@ -141,8 +141,7 @@ def test_database_connection():
     print("=" * 60)
 
     try:
-        from app.core.config import get_settings
-settings = get_settings()
+        from app.core.config import settings
         from sqlalchemy import create_engine, text
 
         print(f"Connecting to: {settings.DATABASE_URL[:50]}...")
@@ -220,8 +219,7 @@ def create_demo_accounts():
 
         # Use direct SQL as fallback
         try:
-            from app.core.config import get_settings
-settings = get_settings()
+            from app.core.config import settings
             from app.core.security import hash_password
             from sqlalchemy import create_engine, text
             import uuid

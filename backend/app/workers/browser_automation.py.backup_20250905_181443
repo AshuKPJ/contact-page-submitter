@@ -6,8 +6,7 @@ Consolidates all browser-related operations from the old modules
 from playwright.async_api import async_playwright, Page
 import re
 from typing import Dict, List, Optional
-from app.core.config import get_settings
-settings = get_settings()
+from app.core.config import settings
 
 
 class BrowserAutomation:

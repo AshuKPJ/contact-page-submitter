@@ -2,8 +2,7 @@ from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import random
 
-from app.core.config import get_settings
-settings = get_settings()
+from app.core.config import settings
 from app.utils.constants import USER_AGENTS, BROWSER_ARGS
 
 

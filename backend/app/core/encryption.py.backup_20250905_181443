@@ -1,8 +1,7 @@
 # app/core/encryption.py
 
 from cryptography.fernet import Fernet
-from app.core.config import get_settings
-settings = get_settings()
+from app.core.config import settings
 import base64
 
 
