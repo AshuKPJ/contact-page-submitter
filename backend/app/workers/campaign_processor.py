@@ -1,183 +1,275 @@
+# app/workers/campaign_processor.py
+"""Campaign processing worker with user-specific CAPTCHA support."""
+
 import asyncio
 import logging
-from datetime import datetime
-from typing import Dict, Any
 import uuid
+import os
+from datetime import datetime
+from typing import Dict, Optional
 
 from app.core.database import SessionLocal
-from app.models.campaign import Campaign
-from app.models.submission import Submission
-from app.models.user_profile import UserProfile
-from app.services.browser_automation_service import BrowserAutomationService
+from app.models.campaign import Campaign, CampaignStatus
+from app.models.submission import Submission, SubmissionStatus
+from app.services.log_service import LogService
+from app.workers.browser_automation import BrowserAutomation
+from app.workers.database_handler import (
+    mark_submission_processing,
+    mark_submission_result,
+    pending_for_campaign,
+    update_campaign_status,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class CampaignProcessor:
-    """Processes campaigns by automating form submissions"""
+    """Process campaign submissions with user-specific configurations."""
 
-    def __init__(self, campaign_id: str):
-        self.campaign_id = (
-            uuid.UUID(campaign_id) if isinstance(campaign_id, str) else campaign_id
-        )
+    def __init__(self, campaign_id: str, user_id: Optional[str] = None):
+        """
+        Initialize campaign processor with FORCED visible browser.
+        """
+        self.campaign_id = str(uuid.UUID(campaign_id))
+        self.user_id = user_id
         self.db = SessionLocal()
-        self.browser_service = BrowserAutomationService()
+        self.browser_automation = None
         self.stats = {
             "total": 0,
             "processed": 0,
             "successful": 0,
             "failed": 0,
-            "email_fallback": 0,
+            "start_time": None,
+            "end_time": None,
         }
 
+        # Log subprocess environment for debugging
+        self._log(
+            "INFO",
+            f"Subprocess environment: HEADFUL={os.getenv('DEV_AUTOMATION_HEADFUL')}, HEADLESS={os.getenv('BROWSER_HEADLESS')}",
+        )
+
+    def _log(self, level: str, msg: str):
+        """Log message using LogService."""
+        LogService.append(
+            level,  # First arg is level
+            msg,  # Second arg is message
+            campaign_id=self.campaign_id,  # Use keyword argument
+            user_id=self.user_id,  # Include user_id if available
+        )
+
+        # Also log to Python logger
+        getattr(logger, level.lower(), logger.info)(
+            f"[Campaign {self.campaign_id[:8]}] [User {self.user_id[:8] if self.user_id else 'N/A'}] {msg}"
+        )
+
     async def run(self):
-        """Main processing method"""
+        """Run campaign processing with VISIBLE browser."""
+        self.stats["start_time"] = datetime.utcnow()
+
         try:
-            logger.info(f"Starting campaign processing: {self.campaign_id}")
+            self._log("INFO", "Starting campaign processing with VISIBLE browser")
 
             # Get campaign
             campaign = (
-                self.db.query(Campaign).filter(Campaign.id == self.campaign_id).first()
+                self.db.query(Campaign)
+                .filter(Campaign.id == uuid.UUID(self.campaign_id))
+                .first()
             )
 
             if not campaign:
                 raise ValueError(f"Campaign {self.campaign_id} not found")
 
-            # Update campaign status
-            campaign.status = "processing"
-            campaign.started_at = datetime.utcnow()
-            self.db.commit()
+            # Get or verify user_id
+            if not self.user_id:
+                self.user_id = str(campaign.user_id)
+                self._log(
+                    "INFO", f"Retrieved user_id from campaign: {self.user_id[:8]}"
+                )
+            elif str(campaign.user_id) != self.user_id:
+                self._log(
+                    "WARNING",
+                    f"Campaign user_id mismatch: expected {campaign.user_id}, got {self.user_id}",
+                )
+                self.user_id = str(campaign.user_id)
 
-            # Get user contact profile
-            user_profile = (
-                self.db.query(UserProfile)
-                .filter(UserProfile.user_id == campaign.user_id)
-                .first()
+            # FORCE VISIBLE BROWSER - Override any configuration
+            self._log("INFO", "FORCING browser to VISIBLE mode")
+            self.browser_automation = BrowserAutomation(
+                headless=False,  # FORCE visible
+                slow_mo=1000,  # FORCE slow motion for visibility
+                user_id=self.user_id,
+                campaign_id=self.campaign_id,
             )
 
-            if not user_profile:
-                raise ValueError("User contact profile not found")
+            # Double-check the settings were applied
+            if hasattr(self.browser_automation, "headless"):
+                self._log(
+                    "INFO",
+                    f"Browser automation headless setting: {self.browser_automation.headless}",
+                )
+                if self.browser_automation.headless:
+                    self._log(
+                        "WARNING",
+                        "Browser is still headless despite forcing visible mode!",
+                    )
+                    # Force it again
+                    self.browser_automation.headless = False
+                    self._log("INFO", "Forced headless=False again")
 
-            # Prepare user data
-            user_data = {
-                "first_name": user_profile.first_name or "John",
-                "last_name": user_profile.last_name or "Doe",
-                "email": user_profile.email or "contact@example.com",
-                "phone_number": user_profile.phone_number,
-                "company_name": user_profile.company_name,
-                "subject": user_profile.subject or "Business Inquiry",
-                "message": user_profile.message
-                or campaign.message
-                or "I am interested in learning more about your services.",
-                "website_url": user_profile.website_url,
-            }
+            # Update status
+            update_campaign_status(
+                self.db,
+                uuid.UUID(self.campaign_id),
+                CampaignStatus.ACTIVE,
+                started_at=datetime.utcnow(),
+            )
+
+            # Get user data including DBC credentials
+            from app.services.submission_service import SubmissionService
+
+            service = SubmissionService(self.db)
+            user_data = service.get_user_profile_data(campaign.user_id)
+
+            # Log CAPTCHA status
+            has_dbc = bool(
+                user_data.get("dbc_username") and user_data.get("dbc_password")
+            )
+            self._log(
+                "INFO",
+                f"CAPTCHA solving {'enabled' if has_dbc else 'disabled'} for this campaign",
+            )
 
             # Get pending submissions
-            submissions = (
-                self.db.query(Submission)
-                .filter(
-                    Submission.campaign_id == self.campaign_id,
-                    Submission.status == "pending",
+            submissions = pending_for_campaign(self.db, uuid.UUID(self.campaign_id))
+            self.stats["total"] = len(submissions)
+
+            if not submissions:
+                self._log("INFO", "No pending submissions found")
+                update_campaign_status(
+                    self.db,
+                    uuid.UUID(self.campaign_id),
+                    CampaignStatus.COMPLETED,
+                    completed_at=datetime.utcnow(),
                 )
-                .all()
+                return
+
+            self._log("INFO", f"Found {len(submissions)} pending submissions")
+
+            # Initialize browser - should be VISIBLE now
+            self._log("INFO", "Starting VISIBLE browser...")
+            await self.browser_automation.start()
+            self._log(
+                "INFO", f"Browser started - should be VISIBLE with DBC: {has_dbc}"
             )
 
-            self.stats["total"] = len(submissions)
-            logger.info(f"Found {len(submissions)} submissions to process")
+            # Process submissions
+            for i, submission in enumerate(submissions, 1):
+                await self._process_submission(
+                    submission, user_data, i, self.stats["total"]
+                )
+                await asyncio.sleep(2)
 
-            # Initialize browser
-            await self.browser_service.initialize()
+            # Complete campaign
+            self.stats["end_time"] = datetime.utcnow()
+            update_campaign_status(
+                self.db,
+                uuid.UUID(self.campaign_id),
+                CampaignStatus.COMPLETED,
+                completed_at=self.stats["end_time"],
+                total_urls=self.stats["total"],
+                submitted_count=self.stats["successful"],
+                failed_count=self.stats["failed"],
+            )
 
-            # Process each submission
-            for idx, submission in enumerate(submissions, 1):
-                try:
-                    logger.info(
-                        f"Processing {idx}/{len(submissions)}: {submission.url}"
-                    )
-
-                    # Process website
-                    result = await self.browser_service.process_website(
-                        submission.url, user_data
-                    )
-
-                    # Update submission
-                    submission.status = "success" if result["success"] else "failed"
-                    submission.success = result["success"]
-                    submission.contact_method = result["method"]
-                    submission.error_message = result.get("error")
-                    submission.processed_at = datetime.utcnow()
-
-                    if result["method"] == "email" and result.get("details", {}).get(
-                        "primary_email"
-                    ):
-                        submission.email_extracted = result["details"]["primary_email"]
-
-                    self.db.commit()
-
-                    # Update stats
-                    self.stats["processed"] += 1
-                    if result["success"]:
-                        self.stats["successful"] += 1
-                        if result["method"] == "email":
-                            self.stats["email_fallback"] += 1
-                    else:
-                        self.stats["failed"] += 1
-
-                    # Update campaign stats
-                    campaign.submitted_count = self.stats["successful"]
-                    campaign.failed_count = self.stats["failed"]
-                    self.db.commit()
-
-                    # Rate limiting
-                    await asyncio.sleep(2)  # Wait 2 seconds between submissions
-
-                except Exception as e:
-                    logger.error(
-                        f"Error processing submission {submission.id}: {str(e)}"
-                    )
-                    submission.status = "failed"
-                    submission.error_message = str(e)[:500]
-                    submission.processed_at = datetime.utcnow()
-                    self.db.commit()
-                    self.stats["failed"] += 1
-
-            # Update campaign completion
-            campaign.status = "completed"
-            campaign.completed_at = datetime.utcnow()
-            campaign.total_urls = self.stats["total"]
-            campaign.submitted_count = self.stats["successful"]
-            campaign.failed_count = self.stats["failed"]
-            self.db.commit()
-
-            logger.info(f"Campaign completed: {self.stats}")
+            self._log("INFO", "Campaign completed successfully")
+            self._log_summary()
 
         except Exception as e:
-            logger.error(f"Campaign processing failed: {str(e)}")
-
-            # Update campaign status
-            campaign = (
-                self.db.query(Campaign).filter(Campaign.id == self.campaign_id).first()
+            self.stats["end_time"] = datetime.utcnow()
+            self._log("ERROR", f"Campaign processing failed: {e}")
+            update_campaign_status(
+                self.db,
+                uuid.UUID(self.campaign_id),
+                CampaignStatus.FAILED,
+                completed_at=self.stats["end_time"],
             )
-
-            if campaign:
-                campaign.status = "failed"
-                campaign.completed_at = datetime.utcnow()
-                self.db.commit()
-
             raise
 
         finally:
-            # Cleanup
-            await self.browser_service.cleanup()
+            try:
+                if self.browser_automation:
+                    await self.browser_automation.stop()
+            except:
+                pass
             self.db.close()
 
+    async def _process_submission(
+        self, submission: Submission, user_data: Dict, index: int, total: int
+    ):
+        """Process a single submission."""
+        try:
+            self._log("INFO", f"Processing {index}/{total}: {submission.url}")
+            mark_submission_processing(self.db, submission.id)
 
-async def process_campaign_async(campaign_id: str):
-    """Async wrapper for campaign processing"""
-    processor = CampaignProcessor(campaign_id)
-    await processor.run()
+            # Process website with user-specific data and CAPTCHA credentials
+            result = await self.browser_automation.process(submission.url, user_data)
 
+            # Update submission
+            success = result.get("success", False)
+            method = result.get("method", "none")
+            error_msg = result.get("error")
+            details = result.get("details", {})
 
-def process_campaign(campaign_id: str):
-    """Synchronous wrapper for campaign processing"""
-    asyncio.run(process_campaign_async(campaign_id))
+            # Log CAPTCHA usage if it was solved
+            if details.get("captcha_solved"):
+                self._log(
+                    "INFO",
+                    f"CAPTCHA solved for {submission.url} (type: {details.get('captcha_type')})",
+                )
+
+            mark_submission_result(
+                self.db,
+                submission.id,
+                success=success,
+                method=method,
+                error_message=error_msg,
+                email_extracted=details.get("primary_email"),
+            )
+
+            # Update stats
+            self.stats["processed"] += 1
+            if success:
+                self.stats["successful"] += 1
+                self._log("INFO", f"Success via {method}: {submission.url}")
+            else:
+                self.stats["failed"] += 1
+                self._log("ERROR", f"Failed: {submission.url} - {error_msg}")
+
+        except Exception as e:
+            self.stats["failed"] += 1
+            self._log("ERROR", f"Processing error for {submission.url}: {e}")
+            mark_submission_result(
+                self.db, submission.id, success=False, error_message=str(e)[:500]
+            )
+
+    def _log_summary(self):
+        """Log campaign summary."""
+        duration = (self.stats["end_time"] - self.stats["start_time"]).total_seconds()
+        success_rate = (
+            (self.stats["successful"] / self.stats["total"] * 100)
+            if self.stats["total"] > 0
+            else 0
+        )
+
+        summary = f"""
+Campaign Summary:
+- User: {self.user_id[:8] if self.user_id else 'N/A'}
+- Total: {self.stats['total']}
+- Successful: {self.stats['successful']}
+- Failed: {self.stats['failed']}
+- Success Rate: {success_rate:.1f}%
+- Duration: {duration:.2f} seconds
+- Processing Speed: {self.stats['total'] / (duration / 3600):.1f} URLs/hour
+"""
+        self._log("INFO", summary)

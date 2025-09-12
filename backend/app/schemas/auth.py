@@ -1,16 +1,15 @@
 # app/schemas/auth.py
 
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
-import uuid
 
 
 class UserLogin(BaseModel):
     """Login request schema"""
 
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=1)
 
 
 class UserRegister(BaseModel):
@@ -18,17 +17,18 @@ class UserRegister(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=6)
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(..., min_length=1, max_length=100)
-    role: Optional[str] = Field(default="user", pattern="^(user|admin|owner)$")
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
 
     @validator("email")
     def email_to_lower(cls, v):
-        return v.lower()
+        return v.lower().strip()
 
     @validator("first_name", "last_name")
     def name_validation(cls, v):
-        return v.strip()
+        if v:
+            return v.strip()
+        return v
 
 
 class UserResponse(BaseModel):
@@ -36,12 +36,15 @@ class UserResponse(BaseModel):
 
     id: str
     email: str
-    first_name: Optional[str]
-    last_name: Optional[str]
-    role: str
-    is_active: bool
-    created_at: datetime
-    subscription_status: Optional[str]
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role: Optional[str] = "user"
+    is_active: Optional[bool] = True
+    is_verified: Optional[bool] = False
+    subscription_status: Optional[str] = None
+    profile_image_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -54,3 +57,35 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
     message: Optional[str] = None
+
+
+class PasswordChangeRequest(BaseModel):
+    """Password change request schema"""
+
+    old_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6)
+
+
+class PasswordResetRequest(BaseModel):
+    """Password reset request schema"""
+
+    email: EmailStr
+
+    @validator("email")
+    def email_to_lower(cls, v):
+        return v.lower().strip()
+
+
+class PasswordResetConfirm(BaseModel):
+    """Password reset confirmation schema"""
+
+    token: str
+    new_password: str = Field(..., min_length=6)
+
+
+class TokenResponse(BaseModel):
+    """Token response schema"""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: Optional[int] = None

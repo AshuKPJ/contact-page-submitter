@@ -5,54 +5,138 @@ import {
   ArrowLeft, Play, CheckCircle, XCircle, Clock, Mail, Globe, 
   AlertCircle, FileText, TrendingUp, Download, RefreshCw,
   Activity, Target, BarChart3, Eye, Send, AlertTriangle,
-  Calendar, Hash, Pause, X
+  Calendar, Hash, Pause, X, Shield, Database
 } from "lucide-react";
 import api from "../services/api";
-import toast from "react-hot-toast";
+import { toast } from "react-hot-toast";
+import { trackEvent } from "../services/telemetry";
 
 const CampaignDetailPage = () => {
   const { campaignId } = useParams();
   const navigate = useNavigate();
   const [campaign, setCampaign] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [submissionLogs, setSubmissionLogs] = useState([]);
+  const [websites, setWebsites] = useState([]);
+  const [captchaStats, setCaptchaStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [refreshing, setRefreshing] = useState(false);
 
+  // Safety check: if campaignId is "new", redirect to FormSubmitterPage
   useEffect(() => {
-    fetchCampaignDetails();
-    
-    // Auto-refresh if campaign is running
-    const interval = setInterval(() => {
-      if (campaign?.status === 'running') {
-        fetchCampaignDetails(true);
+    if (campaignId === 'new') {
+      console.log('[CAMPAIGN_DETAIL] Detected "new" as campaignId, redirecting to form submitter');
+      navigate('/form-submitter', { replace: true });
+      return;
+    }
+  }, [campaignId, navigate]);
+
+  // Main data fetching effect
+  useEffect(() => {
+    if (!campaignId || campaignId === 'new') return;
+
+    const fetchDetails = async (silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        else setRefreshing(true);
+        
+        console.log(`[CAMPAIGN_DETAIL] Fetching details for campaign: ${campaignId}`);
+        
+        // Fetch all campaign data in parallel
+        const [campaignRes, logsRes, submissionLogsRes, websitesRes, captchaRes] = await Promise.allSettled([
+          api.get(`/campaigns/${campaignId}`),
+          api.get(`/campaigns/${campaignId}/logs`),
+          api.get(`/submission-logs?campaign_id=${campaignId}`),
+          api.get(`/campaigns/${campaignId}/websites`),
+          api.get(`/captcha/stats?campaign_id=${campaignId}`)
+        ]);
+        
+        // Process campaign data
+        if (campaignRes.status === 'fulfilled') {
+          setCampaign(campaignRes.value.data);
+        }
+        
+        // Process logs
+        if (logsRes.status === 'fulfilled') {
+          setLogs(logsRes.value.data || []);
+        }
+        
+        // Process submission logs
+        if (submissionLogsRes.status === 'fulfilled') {
+          setSubmissionLogs(submissionLogsRes.value.data || []);
+        }
+        
+        // Process websites
+        if (websitesRes.status === 'fulfilled') {
+          setWebsites(websitesRes.value.data || []);
+        }
+        
+        // Process CAPTCHA stats
+        if (captchaRes.status === 'fulfilled') {
+          setCaptchaStats(captchaRes.value.data);
+        }
+        
+        // Log automation progress
+        if (campaignRes.status === 'fulfilled') {
+          const campaignData = campaignRes.value.data;
+          console.log('[AUTOMATION PROGRESS]', {
+            status: campaignData.status,
+            processed: campaignData.processed || 0,
+            total: campaignData.totalWebsites || 0,
+            successful: campaignData.successful || 0,
+            failed: campaignData.failed || 0,
+            percentComplete: campaignData.totalWebsites > 0 
+              ? Math.round((campaignData.processed / campaignData.totalWebsites) * 100)
+              : 0
+          });
+          
+          // Track campaign view
+          await trackEvent({
+            level: 'INFO',
+            message: 'Campaign viewed',
+            campaign_id: campaignId,
+            context: { status: campaignData.status }
+          });
+        }
+        
+      } catch (error) {
+        console.error('[CAMPAIGN_DETAIL] Error fetching campaign details:', error);
+        
+        if (!silent) {
+          if (error.response?.status === 404) {
+            toast.error(`Campaign not found`);
+            navigate('/campaigns');
+          } else {
+            toast.error('Failed to load campaign details');
+          }
+          
+          await trackEvent({
+            level: 'ERROR',
+            message: 'Failed to load campaign details',
+            campaign_id: campaignId,
+            context: { error: error.message }
+          });
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-    }, 3000); // Refresh every 3 seconds
+    };
+
+    // Initial fetch
+    fetchDetails(false);
+
+    // Set up auto-refresh interval
+    const interval = setInterval(() => {
+      // Only refresh if document is visible and campaign might be active
+      if (document.visibilityState === 'visible') {
+        fetchDetails(true); // Silent refresh
+      }
+    }, 2000); // Refresh every 2 seconds
 
     return () => clearInterval(interval);
-  }, [campaignId, campaign?.status]);
-
-  const fetchCampaignDetails = async (silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      else setRefreshing(true);
-      
-      const [campaignRes, logsRes] = await Promise.all([
-        api.get(`/campaigns/${campaignId}`),
-        api.get(`/campaigns/${campaignId}/logs?limit=50`)
-      ]);
-      
-      setCampaign(campaignRes.data);
-      setLogs(logsRes.data);
-    } catch (error) {
-      console.error('Error fetching campaign details:', error);
-      toast.error('Failed to load campaign details');
-      navigate('/dashboard');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+  }, [campaignId, navigate]);
 
   const handleStopCampaign = async () => {
     if (!window.confirm('Are you sure you want to stop this campaign?')) return;
@@ -60,9 +144,53 @@ const CampaignDetailPage = () => {
     try {
       await api.post(`/campaigns/${campaignId}/stop`);
       toast.success('Campaign stopped');
-      fetchCampaignDetails();
+      
+      await trackEvent({
+        level: 'INFO',
+        message: 'Campaign stopped',
+        campaign_id: campaignId
+      });
+      
+      // Refresh campaign details
+      const response = await api.get(`/campaigns/${campaignId}`);
+      setCampaign(response.data);
     } catch (error) {
+      console.error('[CAMPAIGN_DETAIL] Error stopping campaign:', error);
       toast.error('Failed to stop campaign');
+      
+      await trackEvent({
+        level: 'ERROR',
+        message: 'Failed to stop campaign',
+        campaign_id: campaignId,
+        context: { error: error.message }
+      });
+    }
+  };
+
+  const handleStartCampaign = async () => {
+    try {
+      await api.post(`/campaigns/${campaignId}/start`);
+      toast.success('Campaign started! Processing will begin shortly...');
+      
+      await trackEvent({
+        level: 'INFO',
+        message: 'Campaign started',
+        campaign_id: campaignId
+      });
+      
+      // Refresh campaign details
+      const response = await api.get(`/campaigns/${campaignId}`);
+      setCampaign(response.data);
+    } catch (error) {
+      console.error('[CAMPAIGN_DETAIL] Error starting campaign:', error);
+      toast.error(error.response?.data?.detail || 'Failed to start campaign');
+      
+      await trackEvent({
+        level: 'ERROR',
+        message: 'Failed to start campaign',
+        campaign_id: campaignId,
+        context: { error: error.message }
+      });
     }
   };
 
@@ -79,44 +207,62 @@ const CampaignDetailPage = () => {
       link.click();
       link.remove();
       toast.success('Report downloaded');
+      
+      await trackEvent({
+        level: 'INFO',
+        message: 'Campaign report downloaded',
+        campaign_id: campaignId
+      });
     } catch (error) {
       toast.error('Failed to download report');
+      
+      await trackEvent({
+        level: 'ERROR',
+        message: 'Failed to download report',
+        campaign_id: campaignId,
+        context: { error: error.message }
+      });
     }
   };
 
   const getStatusColor = (status) => {
-    switch (status) {
-      case 'running': return 'text-green-600 bg-green-100';
-      case 'completed': return 'text-blue-600 bg-blue-100';
-      case 'failed': return 'text-red-600 bg-red-100';
-      case 'stopped': return 'text-gray-600 bg-gray-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
-
-  const getLogIcon = (type) => {
-    switch (type) {
-      case 'success': return <CheckCircle className="w-4 h-4 text-green-600" />;
-      case 'email_fallback': return <Mail className="w-4 h-4 text-blue-600" />;
-      case 'failed': return <XCircle className="w-4 h-4 text-red-600" />;
-      case 'no_form': return <AlertCircle className="w-4 h-4 text-yellow-600" />;
-      default: return <Activity className="w-4 h-4 text-gray-600" />;
+    const statusStr = status?.toString().toLowerCase();
+    switch (statusStr) {
+      case 'active':
+      case 'running':
+        return 'bg-green-100 text-green-700';
+      case 'completed':
+        return 'bg-blue-100 text-blue-700';
+      case 'failed':
+        return 'bg-red-100 text-red-700';
+      case 'paused':
+        return 'bg-yellow-100 text-yellow-700';
+      default:
+        return 'bg-gray-100 text-gray-700';
     }
   };
 
   const formatDuration = (startTime, endTime) => {
+    if (!startTime) return 'N/A';
     const start = new Date(startTime);
     const end = endTime ? new Date(endTime) : new Date();
-    const diff = Math.floor((end - start) / 1000); // seconds
+    const diff = Math.floor((end - start) / 1000);
     
     const hours = Math.floor(diff / 3600);
     const minutes = Math.floor((diff % 3600) / 60);
-    const seconds = diff % 60;
     
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      return `${days}d ${hours % 24}h`;
+    }
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
   };
+
+  // Don't render if campaignId is "new"
+  if (campaignId === 'new') {
+    return null;
+  }
 
   if (loading) {
     return (
@@ -136,10 +282,10 @@ const CampaignDetailPage = () => {
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <p className="text-gray-600">Campaign not found</p>
           <button
-            onClick={() => navigate('/dashboard')}
+            onClick={() => navigate('/campaigns')}
             className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
           >
-            Back to Dashboard
+            Back to Campaigns
           </button>
         </div>
       </div>
@@ -147,17 +293,36 @@ const CampaignDetailPage = () => {
   }
 
   const successRate = Math.round((campaign.successful / Math.max(campaign.processed, 1)) * 100);
-  const isRunning = campaign.status === 'running';
+  const isRunning = campaign.status === 'ACTIVE' || campaign.status === 'running';
+  const isDraft = campaign.status === 'DRAFT' || campaign.status === 'draft';
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Show automation status banner */}
+      {isRunning && (
+        <div className="bg-green-500 text-white px-4 py-2">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+              <span className="font-medium">Automation Running</span>
+              <span className="text-green-100">
+                Processing website {campaign.processed + 1} of {campaign.totalWebsites}
+              </span>
+            </div>
+            <span className="text-sm">
+              ~{Math.ceil((campaign.totalWebsites - campaign.processed) / 120)} hours remaining
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <button
-                onClick={() => navigate('/dashboard')}
+                onClick={() => navigate('/campaigns')}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <ArrowLeft className="w-5 h-5 text-gray-600" />
@@ -167,7 +332,8 @@ const CampaignDetailPage = () => {
                   {campaign.name || `Campaign #${campaign.id}`}
                 </h1>
                 <p className="text-gray-600">
-                  {campaign.fileName} • Started {new Date(campaign.startTime).toLocaleString()}
+                  {campaign.fileName || campaign.file_name} • 
+                  {campaign.totalWebsites || campaign.total_websites || 0} URLs
                 </p>
               </div>
             </div>
@@ -180,6 +346,16 @@ const CampaignDetailPage = () => {
                 </div>
               )}
               
+              {isDraft && (
+                <button
+                  onClick={handleStartCampaign}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center space-x-2"
+                >
+                  <Play className="w-4 h-4" />
+                  <span>Start Campaign</span>
+                </button>
+              )}
+              
               {isRunning && (
                 <button
                   onClick={handleStopCampaign}
@@ -190,7 +366,7 @@ const CampaignDetailPage = () => {
                 </button>
               )}
               
-              {campaign.status === 'completed' && (
+              {campaign.status === 'COMPLETED' && (
                 <button
                   onClick={handleDownloadReport}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center space-x-2"
@@ -204,346 +380,243 @@ const CampaignDetailPage = () => {
         </div>
       </div>
 
+      {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Status Card */}
-        <div className={`rounded-xl shadow-lg border-2 p-6 mb-6 ${
-          isRunning ? 'bg-green-50 border-green-500' : 
-          campaign.status === 'completed' ? 'bg-blue-50 border-blue-500' :
-          'bg-gray-50 border-gray-500'
-        }`}>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-3">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                isRunning ? 'bg-green-100' : 
-                campaign.status === 'completed' ? 'bg-blue-100' :
-                'bg-gray-100'
-              }`}>
-                {isRunning ? (
-                  <Play className="w-6 h-6 text-green-600" />
-                ) : campaign.status === 'completed' ? (
-                  <CheckCircle className="w-6 h-6 text-blue-600" />
-                ) : (
-                  <Pause className="w-6 h-6 text-gray-600" />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h2 className="text-xl font-bold text-gray-900">
-                    Campaign {campaign.status === 'running' ? 'Running' : 
-                             campaign.status === 'completed' ? 'Completed' : 
-                             'Stopped'}
-                  </h2>
-                  {isRunning && (
-                    <div className="flex items-center space-x-1 text-sm text-green-600">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                      <span>Live</span>
-                    </div>
-                  )}
-                </div>
-                <p className="text-sm text-gray-600">
-                  Duration: {formatDuration(campaign.startTime, campaign.endTime)}
-                </p>
-              </div>
-            </div>
-            
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-900">{successRate}%</p>
-              <p className="text-sm text-gray-600">Success Rate</p>
-            </div>
-          </div>
-
-          {/* Progress Bar */}
-          <div className="mb-4">
-            <div className="flex justify-between text-sm mb-2">
-              <span className="text-gray-700 font-medium">
-                {campaign.processed} of {campaign.totalWebsites} websites processed
-              </span>
-              <span className="font-bold text-gray-900">
-                {Math.round((campaign.processed / campaign.totalWebsites) * 100)}%
-              </span>
-            </div>
-            <div className="w-full bg-white rounded-full h-6 shadow-inner">
-              <div 
-                className={`h-6 rounded-full transition-all duration-500 ${
-                  isRunning ? 'bg-gradient-to-r from-green-500 to-green-600' :
-                  campaign.status === 'completed' ? 'bg-gradient-to-r from-blue-500 to-blue-600' :
-                  'bg-gray-500'
-                }`}
-                style={{ width: `${(campaign.processed / campaign.totalWebsites) * 100}%` }}
-              />
-            </div>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="bg-white rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900">{campaign.totalWebsites}</p>
-              <p className="text-xs text-gray-600">Total Sites</p>
-            </div>
-            <div className="bg-white rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-green-600">{campaign.successful}</p>
-              <p className="text-xs text-gray-600">Successful</p>
-            </div>
-            <div className="bg-white rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-blue-600">{campaign.emailFallback || 0}</p>
-              <p className="text-xs text-gray-600">Email Sent</p>
-            </div>
-            <div className="bg-white rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-yellow-600">{campaign.noForm || 0}</p>
-              <p className="text-xs text-gray-600">No Form</p>
-            </div>
-            <div className="bg-white rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-red-600">{campaign.failed}</p>
-              <p className="text-xs text-gray-600">Failed</p>
-            </div>
-          </div>
-        </div>
-
         {/* Tabs */}
-        <div className="bg-white rounded-xl shadow-lg border overflow-hidden">
+        <div className="bg-white rounded-lg shadow mb-6">
           <div className="border-b">
-            <div className="flex">
-              <button
-                onClick={() => setActiveTab('overview')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${
-                  activeTab === 'overview' 
-                    ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Overview
-              </button>
-              <button
-                onClick={() => setActiveTab('logs')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${
-                  activeTab === 'logs' 
-                    ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Activity Logs ({logs.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('analytics')}
-                className={`px-6 py-3 text-sm font-medium transition-colors ${
-                  activeTab === 'analytics' 
-                    ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Analytics
-              </button>
-            </div>
+            <nav className="flex space-x-8 px-6" aria-label="Tabs">
+              {['overview', 'submissions', 'websites', 'logs'].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`py-4 px-1 border-b-2 font-medium text-sm capitalize ${
+                    activeTab === tab
+                      ? 'border-indigo-500 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </nav>
           </div>
 
+          {/* Tab Content */}
           <div className="p-6">
-            {/* Overview Tab */}
             {activeTab === 'overview' && (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Campaign Information</h3>
-                    <dl className="space-y-3">
-                      <div className="flex justify-between">
-                        <dt className="text-sm text-gray-600">Campaign ID</dt>
-                        <dd className="text-sm font-medium text-gray-900">#{campaign.id}</dd>
-                      </div>
-                      <div className="flex justify-between">
-                        <dt className="text-sm text-gray-600">File Name</dt>
-                        <dd className="text-sm font-medium text-gray-900">{campaign.fileName}</dd>
-                      </div>
-                      <div className="flex justify-between">
-                        <dt className="text-sm text-gray-600">Started</dt>
-                        <dd className="text-sm font-medium text-gray-900">
-                          {new Date(campaign.startTime).toLocaleString()}
-                        </dd>
-                      </div>
-                      {campaign.endTime && (
-                        <div className="flex justify-between">
-                          <dt className="text-sm text-gray-600">Ended</dt>
-                          <dd className="text-sm font-medium text-gray-900">
-                            {new Date(campaign.endTime).toLocaleString()}
-                          </dd>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <dt className="text-sm text-gray-600">Processing Rate</dt>
-                        <dd className="text-sm font-medium text-gray-900">~120 sites/hour</dd>
-                      </div>
-                    </dl>
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-500">Total URLs</span>
+                      <Globe className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {campaign.totalWebsites || campaign.total_websites || 0}
+                    </p>
                   </div>
                   
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance Metrics</h3>
-                    <div className="space-y-4">
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-gray-600">Form Success</span>
-                          <span className="font-medium text-gray-900">
-                            {Math.round((campaign.successful / Math.max(campaign.processed, 1)) * 100)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-green-500 h-2 rounded-full"
-                            style={{ width: `${(campaign.successful / Math.max(campaign.processed, 1)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-gray-600">Email Fallback</span>
-                          <span className="font-medium text-gray-900">
-                            {Math.round(((campaign.emailFallback || 0) / Math.max(campaign.processed, 1)) * 100)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-blue-500 h-2 rounded-full"
-                            style={{ width: `${((campaign.emailFallback || 0) / Math.max(campaign.processed, 1)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="text-gray-600">Failed</span>
-                          <span className="font-medium text-gray-900">
-                            {Math.round((campaign.failed / Math.max(campaign.processed, 1)) * 100)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-red-500 h-2 rounded-full"
-                            style={{ width: `${(campaign.failed / Math.max(campaign.processed, 1)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-500">Processed</span>
+                      <Activity className="w-4 h-4 text-gray-400" />
                     </div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {campaign.processed || 0}
+                    </p>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-500">Success Rate</span>
+                      <Target className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {successRate}%
+                    </p>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-500">Duration</span>
+                      <Clock className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {formatDuration(campaign.started_at, campaign.completed_at)}
+                    </p>
                   </div>
                 </div>
 
-                {/* Message Template */}
-                {campaign.messageTemplate && (
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Message Template Used</h3>
-                    <div className="bg-gray-50 rounded-lg p-4">
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                        {campaign.messageTemplate}
-                      </p>
+                {/* Progress Bar */}
+                <div>
+                  <div className="flex justify-between text-sm text-gray-600 mb-2">
+                    <span>Progress</span>
+                    <span>{Math.round((campaign.processed / Math.max(campaign.totalWebsites, 1)) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div 
+                      className="bg-indigo-600 h-3 rounded-full transition-all"
+                      style={{ width: `${Math.round((campaign.processed / Math.max(campaign.totalWebsites, 1)) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* CAPTCHA Stats */}
+                {captchaStats && (
+                  <div className="bg-blue-50 rounded-lg p-4">
+                    <div className="flex items-center mb-3">
+                      <Shield className="w-5 h-5 text-blue-600 mr-2" />
+                      <h3 className="font-semibold text-gray-900">CAPTCHA Statistics</h3>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-600">Encountered:</span>
+                        <p className="font-semibold text-gray-900">{captchaStats.encountered || 0}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Solved:</span>
+                        <p className="font-semibold text-gray-900">{captchaStats.solved || 0}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Success Rate:</span>
+                        <p className="font-semibold text-gray-900">
+                          {captchaStats.success_rate || 0}%
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Logs Tab */}
+            {activeTab === 'submissions' && (
+              <div className="space-y-4">
+                {submissionLogs.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            URL
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Timestamp
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Details
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {submissionLogs.map((log) => (
+                          <tr key={log.id}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {log.target_url}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                log.status === 'success' ? 'bg-green-100 text-green-800' :
+                                log.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                'bg-yellow-100 text-yellow-800'
+                              }`}>
+                                {log.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {new Date(log.timestamp).toLocaleString()}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-500">
+                              {log.details}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-center py-8">No submission logs available</p>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'websites' && (
+              <div className="space-y-4">
+                {websites.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Domain
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Form Detected
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            CAPTCHA
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Status
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {websites.map((website) => (
+                          <tr key={website.id}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {website.domain}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {website.form_detected ? (
+                                <CheckCircle className="w-4 h-4 text-green-500" />
+                              ) : (
+                                <XCircle className="w-4 h-4 text-red-500" />
+                              )}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {website.has_captcha ? website.captcha_type : 'None'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(website.status)}`}>
+                                {website.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-center py-8">No website data available</p>
+                )}
+              </div>
+            )}
+
             {activeTab === 'logs' && (
               <div className="space-y-4">
                 {logs.length > 0 ? (
                   <div className="space-y-2">
                     {logs.map((log, idx) => (
-                      <div key={idx} className="flex items-start space-x-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
-                        {getLogIcon(log.type)}
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-gray-900">
-                            {log.website}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {log.message} • {new Date(log.timestamp).toLocaleTimeString()}
-                          </p>
+                      <div key={idx} className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900">{log.action}</p>
+                            <p className="text-xs text-gray-500 mt-1">{log.details}</p>
+                          </div>
+                          <span className="text-xs text-gray-400">
+                            {new Date(log.timestamp).toLocaleTimeString()}
+                          </span>
                         </div>
-                        <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${
-                          log.type === 'success' ? 'bg-green-100 text-green-800' :
-                          log.type === 'email_fallback' ? 'bg-blue-100 text-blue-800' :
-                          log.type === 'no_form' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-red-100 text-red-800'
-                        }`}>
-                          {log.type.replace('_', ' ')}
-                        </span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-12">
-                    <Activity className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                    <p className="text-gray-500">No activity logs yet</p>
-                    <p className="text-sm text-gray-400 mt-1">Logs will appear as the campaign processes websites</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Analytics Tab */}
-            {activeTab === 'analytics' && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <Target className="w-8 h-8 text-green-600" />
-                      <span className="text-2xl font-bold text-green-700">{successRate}%</span>
-                    </div>
-                    <p className="text-sm font-medium text-green-800">Overall Success Rate</p>
-                    <p className="text-xs text-green-600 mt-1">Above average performance</p>
-                  </div>
-                  
-                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <Clock className="w-8 h-8 text-blue-600" />
-                      <span className="text-2xl font-bold text-blue-700">
-                        {Math.round(campaign.processed / (campaign.duration || 1))} /hr
-                      </span>
-                    </div>
-                    <p className="text-sm font-medium text-blue-800">Processing Speed</p>
-                    <p className="text-xs text-blue-600 mt-1">Sites per hour</p>
-                  </div>
-                  
-                  <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <Send className="w-8 h-8 text-purple-600" />
-                      <span className="text-2xl font-bold text-purple-700">
-                        {campaign.successful + (campaign.emailFallback || 0)}
-                      </span>
-                    </div>
-                    <p className="text-sm font-medium text-purple-800">Messages Delivered</p>
-                    <p className="text-xs text-purple-600 mt-1">Total outreach</p>
-                  </div>
-                </div>
-
-                {/* Failure Analysis */}
-                {campaign.failed > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Failure Analysis</h3>
-                    <div className="bg-red-50 rounded-lg p-4">
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-700">CAPTCHA Failures</span>
-                          <span className="text-sm font-medium text-gray-900">
-                            {campaign.captchaFailed || 0}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-700">No Contact Form Found</span>
-                          <span className="text-sm font-medium text-gray-900">
-                            {campaign.noForm || 0}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-700">Website Unreachable</span>
-                          <span className="text-sm font-medium text-gray-900">
-                            {campaign.unreachable || 0}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-700">Other Errors</span>
-                          <span className="text-sm font-medium text-gray-900">
-                            {campaign.failed - (campaign.captchaFailed || 0) - (campaign.noForm || 0) - (campaign.unreachable || 0)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <p className="text-gray-500 text-center py-8">No logs available</p>
                 )}
               </div>
             )}

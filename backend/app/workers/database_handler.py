@@ -1,162 +1,121 @@
-"""
-Database handler for all campaign-related database operations
-Uses existing database setup from app.core.database
-"""
+# app/workers/database_handler.py
+"""Database operations for workers."""
 
+import uuid
+import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Optional, List
+
 from sqlalchemy.orm import Session
-from app.core.database import SessionLocal
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.models.submission import Submission, SubmissionStatus
+from app.models.campaign import Campaign, CampaignStatus
+
+logger = logging.getLogger(__name__)
 
 
-class DatabaseHandler:
-    """Handles all database operations for campaign processing"""
+def mark_submission_processing(db: Session, submission_id: uuid.UUID) -> bool:
+    """Mark submission as processing."""
+    try:
+        submission = db.query(Submission).filter(Submission.id == submission_id).first()
 
-    def __init__(self, db: Session = None):
-        """Initialize with existing session or create new one"""
-        # Use provided session or create a new one
-        self.session = db if db else SessionLocal()
-        self.owns_session = db is None  # Track if we created the session
+        if not submission:
+            logger.warning(f"Submission {submission_id} not found")
+            return False
 
-    def get_campaign(self, campaign_id: str):
-        """Get campaign by ID"""
-        from app.models.campaign import Campaign
+        submission.status = SubmissionStatus.PROCESSING
+        submission.started_at = datetime.utcnow()
+        db.commit()
 
-        return self.session.query(Campaign).filter(Campaign.id == campaign_id).first()
+        logger.debug(f"Marked submission {submission_id} as PROCESSING")
+        return True
 
-    def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """Get user contact profile for form filling"""
-        from app.models.user_profile import UserProfile
+    except SQLAlchemyError as e:
+        logger.error(f"Database error: {e}")
+        db.rollback()
+        return False
 
-        profile = (
-            self.session.query(UserProfile)
-            .filter(UserProfile.user_id == user_id)
-            .first()
+
+def mark_submission_result(
+    db: Session,
+    submission_id: uuid.UUID,
+    *,
+    success: bool,
+    method: Optional[str] = None,
+    error_message: Optional[str] = None,
+    email_extracted: Optional[str] = None,
+) -> bool:
+    """Mark submission with result."""
+    try:
+        submission = db.query(Submission).filter(Submission.id == submission_id).first()
+
+        if not submission:
+            logger.warning(f"Submission {submission_id} not found")
+            return False
+
+        submission.status = (
+            SubmissionStatus.SUCCESS if success else SubmissionStatus.FAILED
         )
+        submission.success = success
+        submission.contact_method = method
+        submission.error_message = error_message[:500] if error_message else None
+        submission.processed_at = datetime.utcnow()
 
-        if profile:
-            return {
-                "first_name": profile.first_name or "John",
-                "last_name": profile.last_name or "Doe",
-                "email": profile.email or "contact@example.com",
-                "phone_number": profile.phone_number,
-                "company_name": profile.company_name,
-                "message": profile.message
-                or (
-                    "Hello, I am interested in learning more about your services. "
-                    "Please contact me at your earliest convenience. Thank you."
-                ),
-                "website_url": profile.website_url,
-                "linkedin_url": profile.linkedin_url,
-            }
+        if email_extracted:
+            submission.email_extracted = email_extracted
 
-        # Return default profile if none exists
-        return {
-            "first_name": "John",
-            "last_name": "Doe",
-            "email": "contact@example.com",
-            "phone_number": "+1-555-0123",
-            "company_name": "Example Company",
-            "message": (
-                "Hello, I am interested in learning more about your services. "
-                "Please contact me at your earliest convenience. Thank you."
-            ),
-        }
+        db.commit()
 
-    def get_pending_submissions(self, campaign_id: str, limit: int = 100) -> List:
-        """Get pending submissions for a campaign"""
-        from app.models.submission import Submission
+        logger.debug(f"Marked submission {submission_id}: success={success}")
+        return True
 
+    except SQLAlchemyError as e:
+        logger.error(f"Database error: {e}")
+        db.rollback()
+        return False
+
+
+def pending_for_campaign(db: Session, campaign_id: uuid.UUID) -> List[Submission]:
+    """Get pending submissions for campaign."""
+    try:
         return (
-            self.session.query(Submission)
+            db.query(Submission)
             .filter(
-                Submission.campaign_id == campaign_id, Submission.status == "pending"
+                Submission.campaign_id == campaign_id,
+                Submission.status == SubmissionStatus.PENDING,
             )
-            .limit(limit)
+            .order_by(Submission.created_at.asc())
             .all()
         )
+    except SQLAlchemyError as e:
+        logger.error(f"Database error: {e}")
+        return []
 
-    def update_submission(self, submission, result: Dict[str, Any]):
-        """Update submission with processing result"""
-        try:
-            submission.status = result["status"]
-            submission.success = result["success"]
-            submission.contact_method = result.get("method")
-            submission.email_extracted = result.get("email_extracted")
-            submission.error_message = result.get("error")
-            submission.processed_at = datetime.utcnow()
 
-            # Store details if available
-            if result.get("details"):
-                details_str = " | ".join(result["details"])
-                if len(details_str) > 500:
-                    details_str = details_str[:497] + "..."
-                submission.error_message = details_str
+def update_campaign_status(
+    db: Session, campaign_id: uuid.UUID, status: CampaignStatus, **fields
+) -> bool:
+    """Update campaign status."""
+    try:
+        campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
 
-            self.session.commit()
+        if not campaign:
+            logger.warning(f"Campaign {campaign_id} not found")
+            return False
 
-        except Exception as e:
-            self.session.rollback()
-            print(f"Error updating submission: {e}")
-            raise
+        campaign.status = status
 
-    def update_campaign_stats(
-        self, campaign_id: str, successful: int, failed: int, status: str
-    ):
-        """Update campaign statistics and status"""
-        from app.models.campaign import Campaign
+        for field_name, field_value in fields.items():
+            if hasattr(campaign, field_name):
+                setattr(campaign, field_name, field_value)
 
-        try:
-            campaign = (
-                self.session.query(Campaign).filter(Campaign.id == campaign_id).first()
-            )
+        db.commit()
 
-            if campaign:
-                campaign.submitted_count = successful
-                campaign.failed_count = failed
-                campaign.status = status
+        logger.debug(f"Updated campaign {campaign_id} to {status}")
+        return True
 
-                if status in ["completed", "failed"]:
-                    campaign.completed_at = datetime.utcnow()
-
-                self.session.commit()
-
-        except Exception as e:
-            self.session.rollback()
-            print(f"Error updating campaign stats: {e}")
-            raise
-
-    def log_submission_result(self, campaign_id: str, result: Dict[str, Any]):
-        """Log submission processing result (optional)"""
-        try:
-            # Check if SubmissionLog model exists
-            from app.models.submission_log import SubmissionLog
-
-            log = SubmissionLog(
-                campaign_id=campaign_id,
-                submission_id=result.get("submission_id"),
-                target_url=result.get("url"),
-                status=result.get("status"),
-                action="PROCESSED",
-                details=str(result)[:1000],
-                timestamp=datetime.utcnow(),
-            )
-
-            self.session.add(log)
-            self.session.commit()
-
-        except ImportError:
-            # SubmissionLog model doesn't exist, skip logging
-            pass
-        except Exception as e:
-            # Don't fail on logging errors
-            self.session.rollback()
-            print(f"Warning: Could not log submission result: {e}")
-
-    def close(self):
-        """Close database connection only if we own it"""
-        if self.owns_session and self.session:
-            try:
-                self.session.close()
-            except Exception as e:
-                print(f"Error closing database session: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Database error: {e}")
+        db.rollback()
+        return False
